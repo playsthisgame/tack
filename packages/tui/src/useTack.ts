@@ -9,6 +9,7 @@ export interface Turn {
   model: string;
   response: string;
   done: boolean;
+  inFlight: boolean;
   showWhy: boolean;
   error?: string;
 }
@@ -41,12 +42,23 @@ export function useTack(services: TackServices): TackState {
     try {
       const { textStream } = await services.dispatch(model, context);
       for await (const chunk of textStream) {
-        setTurns((prev) => replace(prev, turnIndex, (t) => ({ ...t, response: t.response + chunk })));
+        setTurns((prev) =>
+          replace(prev, turnIndex, (t) => ({
+            ...t,
+            inFlight: false,
+            response: t.response + chunk,
+          })),
+        );
       }
-      setTurns((prev) => replace(prev, turnIndex, (t) => ({ ...t, done: true })));
+      setTurns((prev) => replace(prev, turnIndex, (t) => ({ ...t, done: true, inFlight: false })));
     } catch (err) {
       setTurns((prev) =>
-        replace(prev, turnIndex, (t) => ({ ...t, done: true, error: (err as Error).message })),
+        replace(prev, turnIndex, (t) => ({
+          ...t,
+          done: true,
+          inFlight: false,
+          error: (err as Error).message,
+        })),
       );
     }
   }
@@ -69,7 +81,7 @@ export function useTack(services: TackServices): TackState {
     // Show the routed tier + model immediately — before any response streams.
     setTurns((prev) => [
       ...prev,
-      { prompt, decision, model, response: "", done: false, showWhy: false },
+      { prompt, decision, model, response: "", done: false, inFlight: true, showWhy: false },
     ]);
     services.log(context, decision, model);
 

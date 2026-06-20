@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
-import type { RoutingDecision, Tier } from "@tack/core";
+import { defaultConfig, type RoutingDecision, type Tier } from "@tack/core";
 import { createServices, type TackServices } from "./services";
 import { useTack, type Turn } from "./useTack";
 
@@ -10,6 +10,17 @@ const TIER_COLOR: Record<Tier, string> = {
   mid: "yellow",
   frontier: "red",
 };
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function Spinner(): React.JSX.Element {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(id);
+  }, []);
+  return <Text color="cyan">{SPINNER_FRAMES[frame]}</Text>;
+}
 
 /** "frontier · anthropic/claude-opus-4.8" — the routed tier and model. */
 export function ModelBadge({ tier, model }: { tier: Tier; model: string }): React.JSX.Element {
@@ -52,6 +63,11 @@ export function TurnView({ turn }: { turn: Turn }): React.JSX.Element {
         <ModelBadge tier={turn.decision.tier} model={turn.model} />
       </Box>
       {turn.showWhy && <Why decision={turn.decision} />}
+      {turn.inFlight && turn.response.length === 0 && (
+        <Box marginLeft={2}>
+          <Spinner />
+        </Box>
+      )}
       {turn.response.length > 0 && (
         <Box marginLeft={2}>
           <Text>{turn.response}</Text>
@@ -72,6 +88,29 @@ function Transcript({ turns }: { turns: Turn[] }): React.JSX.Element {
       {turns.map((turn, i) => (
         <TurnView key={i} turn={turn} />
       ))}
+    </Box>
+  );
+}
+
+function WelcomePanel(): React.JSX.Element {
+  const tiers = Object.entries(defaultConfig.tierModels) as [Tier, string][];
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Text bold>tack — heuristic prompt router</Text>
+      <Box flexDirection="column" marginTop={1}>
+        <Text dimColor>tier routing:</Text>
+        {tiers.map(([tier, model]) => (
+          <Box key={tier} marginLeft={2}>
+            <Text color={TIER_COLOR[tier]}>{tier.padEnd(10)}</Text>
+            <Text dimColor>{model}</Text>
+          </Box>
+        ))}
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        <Text dimColor>keys:</Text>
+        <Text dimColor>  ^w   toggle routing rationale for last turn</Text>
+        <Text dimColor>  ^c   quit</Text>
+      </Box>
     </Box>
   );
 }
@@ -132,12 +171,12 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
 
   return (
     <Box flexDirection="column">
+      {turns.length === 0 && pendingKey === null && <WelcomePanel />}
       <Transcript turns={turns} />
       {pendingKey ? (
         <KeyPrompt provider={pendingKey.provider} onSubmit={(key) => void provideKey(key)} />
       ) : (
-        <Box>
-          <Text color="cyan">› </Text>
+        <Box borderStyle="round" borderColor="cyan">
           <TextInput
             value={input}
             onChange={setInput}
