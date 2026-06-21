@@ -1,8 +1,8 @@
 import type { ScoringConfig } from "./config";
-import { HeuristicScorer } from "./scorer";
+import { buildScorer } from "./build-scorer";
 import { SessionTracker } from "./session";
-import { BpeTokenizer } from "./tokenizer";
-import type { Advisory, PromptMessage, RoutingDecision, SessionStats, Tokenizer } from "./types";
+import type { LabeledExampleStore } from "./labeled-store";
+import type { Advisory, PromptMessage, RoutingDecision, Scorer, SessionStats, Tokenizer } from "./types";
 
 /** One simulated turn: the routing decision, any advisory it raised, and whether
  * a real dispatch would have proceeded (false when the context exceeds all windows). */
@@ -35,6 +35,14 @@ export interface SimulateRouteOptions {
    * scores prompt + history only.
    */
   system?: string;
+  /**
+   * Scorer to simulate with. Defaults to the one `config.scorer` selects (built via
+   * `buildScorer`). Pass an explicit scorer to pin behavior — e.g. tests that want
+   * the heuristic without loading the embedding model.
+   */
+  scorer?: Scorer;
+  /** User labeled-example store for the k-NN scorer. Seed-only when omitted. */
+  store?: LabeledExampleStore;
 }
 
 /**
@@ -49,7 +57,8 @@ export async function simulateRoute(
   config: ScoringConfig,
   opts: SimulateRouteOptions = {},
 ): Promise<RouteSimulation> {
-  const scorer = new HeuristicScorer(config, opts.tokenizer ?? new BpeTokenizer());
+  const scorer =
+    opts.scorer ?? (await buildScorer(config, { tokenizer: opts.tokenizer, store: opts.store }));
   const tracker = new SessionTracker(config);
   const history: PromptMessage[] = [];
   const turns: RouteTurn[] = [];

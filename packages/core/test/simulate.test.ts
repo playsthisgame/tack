@@ -8,13 +8,19 @@ import {
 
 // Tiny windows + disabled token bands so context-window escalation is isolated
 // from complexity (a large context must not also raise the complexity score).
+// Pinned to the heuristic scorer: these tests exercise the (now shared) feasibility
+// stage, which must behave identically regardless of which scorer picks the tier,
+// and pinning avoids loading the embedding model the k-NN default would require.
 const tinyConfig: ScoringConfig = {
   ...defaultConfig,
+  scorer: "heuristic",
   tokenBands: [],
   tierWindows: { cheap: 50, mid: 500, frontier: 1000 },
   responseHeadroom: 10,
   advisoryThreshold: 3,
 };
+
+const heuristicDefaults: ScoringConfig = { ...defaultConfig, scorer: "heuristic" };
 
 /** Filler of roughly `tokens` tokens (ApproxTokenizer ≈ 1 token / 4 chars). */
 function filler(tokens: number): string {
@@ -63,7 +69,7 @@ describe("simulateRoute", () => {
   });
 
   test("small prompts on real windows neither escalate nor advise", async () => {
-    const { turns, stats } = await simulateRoute(["fix typo", "rename x"], defaultConfig, {
+    const { turns, stats } = await simulateRoute(["fix typo", "rename x"], heuristicDefaults, {
       tokenizer: new ApproxTokenizer(),
     });
     for (const turn of turns) {
@@ -78,6 +84,7 @@ describe("simulateRoute", () => {
     // turn fits cheap, but once history accumulates past the cheap window it escalates.
     const config: ScoringConfig = {
       ...defaultConfig,
+      scorer: "heuristic",
       tokenBands: [],
       tierWindows: { cheap: 60, mid: 500, frontier: 1000 },
       responseHeadroom: 0,

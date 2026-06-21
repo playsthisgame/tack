@@ -35,6 +35,8 @@ describe("AgentLoop — blocking advisory", () => {
       score: 0,
       contributions: [],
       tokenCount: 5_000_000,
+      confidence: 0,
+      neighbors: [],
     };
     const loop = new AgentLoop({
       scorer: fakeScorer(decision),

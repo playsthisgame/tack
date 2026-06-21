@@ -1,13 +1,15 @@
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import {
-  BpeTokenizer,
+  buildScorer,
   defaultConfig,
-  HeuristicScorer,
   SqliteDecisionLog,
+  SqliteLabeledExampleStore,
   type AgentEvent,
+  type LabeledExampleStore,
   type PromptContext,
   type RoutingDecision,
+  type Scorer,
   type Tier,
 } from "@tack/core";
 import {
@@ -51,16 +53,26 @@ export function createServices(): TackServices {
     }
   }
 
-  const scorer = new HeuristicScorer(defaultConfig, new BpeTokenizer());
-  const dispatcher = new AiSdkDispatcher({ env, scorer, config: defaultConfig });
-
   let log: SqliteDecisionLog | undefined;
+  let labeledStore: LabeledExampleStore | undefined;
   try {
     mkdirSync(dirname(dbPath()), { recursive: true });
     log = new SqliteDecisionLog(dbPath());
+    // The k-NN scorer reads the user's own labeled examples from the same DB.
+    labeledStore = new SqliteLabeledExampleStore(dbPath());
   } catch {
     log = undefined;
+    labeledStore = undefined;
   }
+
+  // Build the configured scorer once (the k-NN default loads its model + labeled set
+  // on first use) and share that single instance between the preview `score()` and
+  // the dispatcher, so the model is never loaded twice.
+  let scorerPromise: Promise<Scorer> | null = null;
+  const getScorer = (): Promise<Scorer> =>
+    (scorerPromise ??= buildScorer(defaultConfig, { store: labeledStore }));
+  const scorer: Scorer = { score: async (context) => (await getScorer()).score(context) };
+  const dispatcher = new AiSdkDispatcher({ env, scorer, config: defaultConfig });
 
   return {
     score: (context) => scorer.score(context),

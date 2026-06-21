@@ -42,6 +42,75 @@ export interface SignalContribution {
   weight: number;
 }
 
+/**
+ * One labeled training example: a prompt a human assigned to a tier. The labeled
+ * set IS the k-NN scorer's "model" — editing it is how the scorer is trained.
+ * `source` is an extensible union; only `seed` (shipped) and `user` (the operator's
+ * own labels) exist today, with room for e.g. `"harvested"` later.
+ */
+export interface LabeledExample {
+  /** Stable identifier, unique within its source. */
+  id: string;
+  /** The example prompt text. */
+  prompt: string;
+  /** The tier a human assigned to this prompt. */
+  tier: Tier;
+  /** Where the label came from. User labels win over seed labels on conflict. */
+  source: "seed" | "user";
+}
+
+/**
+ * A `LabeledExample` with its computed embedding. The vector is always tagged with
+ * the `model` that produced it so the loader can refuse to compare vectors across
+ * embedding models (an apples-to-oranges distance is worse than recomputing).
+ */
+export interface EmbeddedExample extends LabeledExample {
+  /** The example's embedding under `model`. */
+  embedding: Float32Array;
+  /** The embedding model that produced `embedding`. */
+  model: string;
+}
+
+/**
+ * The on-disk seed file format. Carries the embedding `model`/`dimension` it was
+ * authored against (for the loader's model guard), a `version`, and the authored
+ * examples. Examples carry no vectors — those are always derived, never authored.
+ */
+export interface SeedFile {
+  model: string;
+  dimension: number;
+  version: number;
+  examples: LabeledExample[];
+}
+
+/**
+ * A nearest labeled example surfaced by the k-NN scorer, for inspection. The
+ * explanation IS the mechanism: a decision reports the actual nearest prompts and
+ * their distances, not an opaque score.
+ */
+export interface Neighbor {
+  id: string;
+  prompt: string;
+  tier: Tier;
+  /** Cosine distance from the scored prompt (0 = identical, larger = farther). */
+  distance: number;
+}
+
+/**
+ * Local embedding provider. `embed` maps text to a vector; `model` and `dimension`
+ * tag every vector it produces so cross-model comparisons can be refused. The
+ * initial implementation runs on-device; a hosted backend is a future swap behind
+ * this same interface.
+ */
+export interface Embedder {
+  /** The model identifier, e.g. "Xenova/all-MiniLM-L6-v2". */
+  readonly model: string;
+  /** The output vector length, e.g. 384. */
+  readonly dimension: number;
+  /** Embed `text` into a `dimension`-length vector. */
+  embed(text: string): Promise<Float32Array>;
+}
+
 /** The full, inspectable result of scoring one prompt. */
 export interface RoutingDecision {
   /** The tier actually chosen, after the context-window feasibility check. */
@@ -68,6 +137,25 @@ export interface RoutingDecision {
   contributions: SignalContribution[];
   /** Token count measured for this context (approximate for non-OpenAI models). */
   tokenCount: number;
+  /**
+   * How sure the scorer is of `tier`, in [0, 1]. For the k-NN scorer this is
+   * derived from the weighted-vote margin and the nearest-neighbor distances; for
+   * the heuristic scorer it is derived from its own signal strength. Both scorers
+   * populate it so the field is part of one shared contract.
+   */
+  confidence: number;
+  /**
+   * The nearest labeled examples that drove a k-NN decision, top-`k` by distance.
+   * Empty for the heuristic scorer (which has no neighbors).
+   */
+  neighbors: Neighbor[];
+  /**
+   * True when the scorer could not decide confidently — the nearest neighbors were
+   * all farther than `distanceThreshold`, the weighted vote margin was below
+   * `marginThreshold`, or the labeled set was empty. When set, the configured
+   * uncertainty policy (escalate/fallback) was applied; see `contributions`.
+   */
+  uncertain?: boolean;
 }
 
 /**

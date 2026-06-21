@@ -1,5 +1,36 @@
 import type { Tier } from "./types";
 
+/** Which scorer produces routing decisions. Selectable; never hardcoded at a call site. */
+export type ScorerKind = "heuristic" | "knn";
+
+/** What to do when the k-NN scorer is not confident in its vote. */
+export type UncertaintyPolicy = "escalate" | "fallback";
+
+/**
+ * All k-NN scorer parameters. Every threshold lives here, never as a magic number in
+ * the scoring logic — tuning the scorer means editing config (or the labeled set),
+ * not code.
+ */
+export interface KnnConfig {
+  /** The embedding model and its dimension (the loader's cross-model guard). */
+  model: string;
+  dimension: number;
+  /** Number of nearest neighbors to consult. */
+  k: number;
+  /**
+   * Cosine-distance ceiling for "near". When every one of the k neighbors is farther
+   * than this, the decision is flagged uncertain.
+   */
+  distanceThreshold: number;
+  /**
+   * Minimum weighted-vote margin (winner − runner-up, normalized) for a confident
+   * decision. Below this the vote is "close" and the decision is flagged uncertain.
+   */
+  marginThreshold: number;
+  /** What to do on uncertainty: escalate one tier, or fall back to the heuristic scorer. */
+  uncertaintyPolicy: UncertaintyPolicy;
+}
+
 /**
  * All tunable scoring parameters live here, never buried as magic numbers in
  * the scoring logic. This is the file a user edits to change routing behavior,
@@ -58,6 +89,15 @@ export interface ScoringConfig {
    * compaction advisory is surfaced. Tunable.
    */
   advisoryThreshold: number;
+
+  /**
+   * Which scorer to use. The heuristic scorer (surface signals) and the k-NN scorer
+   * (semantic similarity) both satisfy `Scorer`; this selects between them.
+   */
+  scorer: ScorerKind;
+
+  /** k-NN scorer parameters. Used only when `scorer` is `"knn"`. */
+  knn: KnnConfig;
 }
 
 /**
@@ -117,4 +157,19 @@ export const defaultConfig: ScoringConfig = {
   },
   responseHeadroom: 8_000,
   advisoryThreshold: 3,
+  // The k-NN scorer is the default routing engine; the heuristic scorer remains as
+  // its uncertainty `fallback` target and as a selectable alternative.
+  scorer: "knn",
+  knn: {
+    model: "Xenova/all-MiniLM-L6-v2",
+    dimension: 384,
+    k: 5,
+    // Cosine distance over normalized vectors is in [0, 2]. all-MiniLM-L6-v2 places
+    // even closely-related short prompts at ~0.5–0.8, so the "all neighbors too far"
+    // gate must sit high or it fires on nearly everything. 0.8 ≈ similarity 0.2 —
+    // only genuinely-unrelated prompts (no good neighbor) trip it.
+    distanceThreshold: 0.8,
+    marginThreshold: 0.15,
+    uncertaintyPolicy: "escalate",
+  },
 };

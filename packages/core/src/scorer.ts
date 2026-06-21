@@ -14,6 +14,7 @@ import {
   hasMultipleFiles,
   hasStackTrace,
 } from "./signals";
+import { applyFeasibility } from "./feasibility";
 
 /**
  * Transparent, weighted-sum scorer. This is deliberately the "dumb" version:
@@ -117,14 +118,33 @@ export class HeuristicScorer implements Scorer {
     // Stage 2: feasibility — the chosen model must be able to hold the context.
     // This may escalate the tier, but never lowers it. Escalation contributions
     // are recorded with weight 0 so they are inspectable without altering the
-    // complexity score (preferred tier stays a pure function of complexity).
-    const { tier, escalated, exceedsAllWindows } = this.applyFeasibility(
+    // complexity score (preferred tier stays a pure function of complexity). The
+    // step is shared with the k-NN scorer so both honor the same window constraint.
+    const { tier, escalated, exceedsAllWindows } = applyFeasibility(
       preferredTier,
       tokenCount,
+      this.config,
       contributions,
     );
 
-    return { tier, preferredTier, escalated, exceedsAllWindows, score, contributions, tokenCount };
+    // Confidence from the heuristic's own signal strength: how far the complexity
+    // score sits from the cheap baseline relative to the frontier threshold. The
+    // heuristic has no neighbors, so that list is always empty — both scorers honor
+    // the one result contract (tier, confidence, neighbors).
+    const { frontier } = this.config.thresholds;
+    const confidence = frontier > 0 ? Math.min(Math.abs(score) / frontier, 1) : 0;
+
+    return {
+      tier,
+      preferredTier,
+      escalated,
+      exceedsAllWindows,
+      score,
+      contributions,
+      tokenCount,
+      confidence,
+      neighbors: [],
+    };
   }
 
   private toTier(score: number): Tier {
@@ -133,49 +153,4 @@ export class HeuristicScorer implements Scorer {
     if (score >= mid) return "mid";
     return "cheap";
   }
-
-  /**
-   * Escalate `preferred` to the smallest tier whose model window can hold the
-   * context (minus headroom). If no tier can, choose the largest-window tier
-   * and flag the overflow. Pushes an inspectable, weight-0 contribution when an
-   * escalation or overflow occurs.
-   */
-  private applyFeasibility(
-    preferred: Tier,
-    tokenCount: number,
-    contributions: SignalContribution[],
-  ): { tier: Tier; escalated: boolean; exceedsAllWindows: boolean } {
-    const order = TIER_ORDER;
-    const { tierWindows, responseHeadroom } = this.config;
-    const fits = (t: Tier) => tierWindows[t] - responseHeadroom >= tokenCount;
-
-    // Smallest tier (by escalation order) whose window holds the context.
-    const feasible = order.find(fits) ?? null;
-
-    if (feasible === null) {
-      // Nothing can hold it — pick the largest window (ties → higher tier).
-      const largest = order.reduce((a, b) => (tierWindows[b] >= tierWindows[a] ? b : a));
-      contributions.push({
-        signal: "context_overflow",
-        detail: `context ${tokenCount} tokens exceeds all tier windows (largest ${tierWindows[largest]})`,
-        weight: 0,
-      });
-      return { tier: largest, escalated: false, exceedsAllWindows: true };
-    }
-
-    const escalated = order.indexOf(feasible) > order.indexOf(preferred);
-    if (escalated) {
-      contributions.push({
-        signal: "context_escalation",
-        detail: `escalated: context ${tokenCount} exceeds ${preferred} window ${tierWindows[preferred]}`,
-        weight: 0,
-      });
-      return { tier: feasible, escalated: true, exceedsAllWindows: false };
-    }
-
-    return { tier: preferred, escalated: false, exceedsAllWindows: false };
-  }
 }
-
-/** Tier escalation order, cheapest first. Shared by feasibility logic. */
-const TIER_ORDER: Tier[] = ["cheap", "mid", "frontier"];

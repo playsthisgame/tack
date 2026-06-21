@@ -16,6 +16,8 @@ const decision: RoutingDecision = {
   score: 3,
   contributions: [{ signal: "keyword:refactor", detail: 'mentions "refactor"', weight: 2 }],
   tokenCount: 5,
+  confidence: 0.6,
+  neighbors: [],
 };
 
 /**

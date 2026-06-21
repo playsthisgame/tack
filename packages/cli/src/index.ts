@@ -3,12 +3,14 @@ import { dirname } from "node:path";
 import { mkdirSync, readFileSync } from "node:fs";
 import {
   BpeTokenizer,
+  buildScorer,
   defaultConfig,
-  HeuristicScorer,
   simulateRoute,
   SqliteDecisionLog,
+  SqliteLabeledExampleStore,
   type PromptContext,
   type RoutingDecision,
+  type Scorer,
   type ScoringConfig,
   type Tier,
 } from "@tack/core";
@@ -65,6 +67,7 @@ function printDecision(d: RoutingDecision, model: string): void {
   console.log(`\ntier:    ${tierLine(d)}`);
   console.log(`model:   ${model}`);
   console.log(`score:   ${d.score}`);
+  console.log(`conf:    ${d.confidence.toFixed(3)}${d.uncertain ? " (uncertain)" : ""}`);
   console.log(`tokens:  ${d.tokenCount}`);
   console.log(`why:`);
   if (d.contributions.length === 0) {
@@ -74,14 +77,37 @@ function printDecision(d: RoutingDecision, model: string): void {
     const sign = c.weight >= 0 ? "+" : "";
     console.log(`  ${sign}${c.weight}  ${c.detail}`);
   }
+  // k-NN decisions surface their nearest labeled prompts and distances — the
+  // explanation IS the mechanism.
+  if (d.neighbors.length > 0) {
+    console.log(`neighbors:`);
+    for (const n of d.neighbors) {
+      const text = n.prompt.replace(/\s+/g, " ").trim();
+      const preview = text.length > 56 ? `${text.slice(0, 55)}…` : text;
+      console.log(`  ${n.distance.toFixed(3)}  ${n.tier.padEnd(8)} "${preview}"`);
+    }
+  }
   console.log();
 }
 
-async function cmdScore(prompt: string, log: boolean): Promise<void> {
-  const scorer = new HeuristicScorer(defaultConfig, new BpeTokenizer());
+/**
+ * Build the scorer the config selects, supplying the k-NN scorer the user's
+ * labeled-example store (seeds + the user's own labels from the log DB).
+ */
+async function resolveScorer(config: ScoringConfig): Promise<Scorer> {
+  if (config.scorer !== "knn") return buildScorer(config, { tokenizer: new BpeTokenizer() });
+  const dbPath = resolveDbPath();
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const store = new SqliteLabeledExampleStore(dbPath);
+  return buildScorer(config, { tokenizer: new BpeTokenizer(), store });
+}
+
+async function cmdScore(prompt: string, log: boolean, scorerKind?: ScoringConfig["scorer"]): Promise<void> {
+  const config: ScoringConfig = scorerKind ? { ...defaultConfig, scorer: scorerKind } : defaultConfig;
+  const scorer = await resolveScorer(config);
   const context: PromptContext = { prompt, history: [] };
   const d = await scorer.score(context);
-  const model = defaultConfig.tierModels[d.tier];
+  const model = config.tierModels[d.tier];
 
   printDecision(d, model);
   logDecision(context, d, model, log);
@@ -301,6 +327,8 @@ usage:
 
 options:
   --no-log                   do not persist the decision to the SQLite log (score/dispatch)
+  --scorer <kind>            score: pick the scorer — "heuristic" (default) or "knn"
+                             (semantic k-NN over the labeled set; loads a local model)
   --why, -v                  route: show the signal breakdown behind each decision
   --context                  route: inject the real environment system prompt (cwd,
                              file tree, git) so token counts match what dispatch sends
@@ -348,13 +376,32 @@ export function parseCommand(argv: string[]): Command {
 
 async function runScoreOrDispatch(kind: "score" | "dispatch", args: string[]): Promise<void> {
   const log = !args.includes("--no-log");
-  const prompt = args.filter((a) => a !== "--no-log").join(" ").trim() || readStdinSync().trim();
+
+  // Pull out `--scorer <heuristic|knn>` (score only); everything else is the prompt.
+  let scorerKind: ScoringConfig["scorer"] | undefined;
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--no-log") continue;
+    if (a === "--scorer") {
+      const v = args[++i];
+      if (v !== "heuristic" && v !== "knn") {
+        console.error(`error: --scorer must be "heuristic" or "knn"`);
+        process.exit(1);
+      }
+      scorerKind = v;
+      continue;
+    }
+    rest.push(a);
+  }
+
+  const prompt = rest.join(" ").trim() || readStdinSync().trim();
   if (!prompt) {
     console.error("error: no prompt provided");
     process.exit(1);
   }
   if (kind === "score") {
-    await cmdScore(prompt, log);
+    await cmdScore(prompt, log, scorerKind);
   } else {
     await cmdDispatch(prompt, log);
   }

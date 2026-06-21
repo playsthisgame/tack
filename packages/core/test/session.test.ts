@@ -23,6 +23,8 @@ function decision(
     tokenCount: 1_000_000, // 1M tokens makes the per-1M cost delta easy to read
     escalated: partial.tier !== partial.preferredTier,
     exceedsAllWindows: false,
+    confidence: 0,
+    neighbors: [],
     ...partial,
   };
 }

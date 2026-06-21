@@ -1,0 +1,49 @@
+{
+  "model": "Xenova/all-MiniLM-L6-v2",
+  "dimension": 384,
+  "version": 1,
+  "notes": "Tier = APPARENT complexity from prompt text alone (the only signal available at routing time). Borderline examples are intentional: they define the boundary. See `boundary` field on contested seeds.",
+  "tierDefinitions": {
+    "cheap": "Mechanical, locally-scoped, unambiguous. No reasoning about system behavior. Renames, formatting, single-line edits, plain explanations of local code.",
+    "mid": "Needs understanding across a file or a bug's symptoms, but the path is fairly clear. Symptom debugging with bounded scope, moderate refactors, writing tests.",
+    "frontier": "Multi-file reasoning, subtle/emergent bugs, architectural decisions, anything expensive if wrong. Concurrency, design tradeoffs, hard-to-reproduce production issues."
+  },
+  "examples": [
+    { "id": "seed-0001", "prompt": "rename the variable `usr` to `user` in this file", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0002", "prompt": "format this JSON", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0003", "prompt": "add a docstring to this function explaining what it does", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0004", "prompt": "convert this for-loop to a map", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0005", "prompt": "what does the reduce call on line 12 do?", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0006", "prompt": "add type annotations to this function's parameters", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0007", "prompt": "comment out the debug logging in this block", "tier": "cheap", "source": "seed" },
+
+    { "id": "seed-0008", "prompt": "why does this test pass locally but fail in CI?", "tier": "mid", "source": "seed", "boundary": "mid/frontier — reads mid, but CI-only failures (env, timing, ordering) can be frontier-hard. Labeled on apparent complexity." },
+    { "id": "seed-0009", "prompt": "write unit tests for this parseConfig function", "tier": "mid", "source": "seed" },
+    { "id": "seed-0010", "prompt": "extract this duplicated logic into a shared helper", "tier": "mid", "source": "seed" },
+    { "id": "seed-0011", "prompt": "add pagination to this API endpoint", "tier": "mid", "source": "seed" },
+    { "id": "seed-0012", "prompt": "this function returns undefined sometimes, figure out why", "tier": "mid", "source": "seed", "boundary": "mid/frontier — 'sometimes' hints at state/timing that can spike to frontier. Labeled on apparent complexity." },
+    { "id": "seed-0013", "prompt": "refactor this callback chain to async/await", "tier": "mid", "source": "seed", "boundary": "cheap/mid — nearly mechanical for a simple chain, mid if tangled with error handling. Safer default = mid." },
+    { "id": "seed-0014", "prompt": "add input validation to this form handler", "tier": "mid", "source": "seed" },
+
+    { "id": "seed-0015", "prompt": "there's a race condition in the worker pool that only shows up under load — find and fix it", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0016", "prompt": "design the data model for a multi-tenant permissions system", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0017", "prompt": "users intermittently get logged out and we can't reproduce it — diagnose the cause", "tier": "frontier", "source": "seed", "boundary": "mid/frontier — casually phrased but emergent and cross-system. Stakes/severity language pushes it frontier." },
+    { "id": "seed-0018", "prompt": "should we use optimistic locking or a queue for this concurrency problem?", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0019", "prompt": "memory grows unbounded over a few hours in production — find the leak", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0020", "prompt": "migrate this service from REST to gRPC without breaking existing clients", "tier": "frontier", "source": "seed" },
+
+    { "id": "seed-0021", "prompt": "change the color of the ASCII art banner shown on launch", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0022", "prompt": "change the ANSI color of the startup banner", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0023", "prompt": "make error messages print in red in the terminal", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0024", "prompt": "make the selected menu item bold in the TUI", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0025", "prompt": "add padding around the input box in the terminal UI", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0026", "prompt": "dim the timestamps in the log output", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0027", "prompt": "swap the spinner glyph for a set of braille dots", "tier": "cheap", "source": "seed" },
+
+    { "id": "seed-0028", "prompt": "add a loading spinner while the model streams its response", "tier": "mid", "source": "seed", "boundary": "cheap/mid — the glyph is trivial, but wiring it to streaming render state nudges it to mid." },
+    { "id": "seed-0029", "prompt": "the TUI layout breaks when the terminal is resized — fix the reflow", "tier": "mid", "source": "seed" },
+    { "id": "seed-0030", "prompt": "the progress bar flickers on every render — figure out why", "tier": "mid", "source": "seed", "boundary": "mid/frontier — symptom-scoped, but render-loop/diffing perf bugs can spike to frontier." },
+
+    { "id": "seed-0031", "prompt": "redesign the TUI into resizable split panes with a focus model", "tier": "frontier", "source": "seed" }
+  ]
+}

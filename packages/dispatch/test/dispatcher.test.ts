@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { streamText as StreamTextFn } from "ai";
-import type { AgentEvent, PromptContext } from "@tack/core";
+import { defaultConfig, type AgentEvent, type PromptContext, type ScoringConfig } from "@tack/core";
 import {
   AiSdkDispatcher,
   UnknownProviderError,
   parseModelString,
   resolveModel,
 } from "../src/index";
+
+// These tests exercise dispatch mechanics (key handling, message building,
+// streaming), not the scorer. Pin the heuristic scorer so they stay fast and
+// network-free — the k-NN default would load the embedding model.
+const heuristicConfig: ScoringConfig = { ...defaultConfig, scorer: "heuristic" };
 
 const allKeys = {
   ANTHROPIC_API_KEY: "test-key",
@@ -73,7 +78,7 @@ describe("AiSdkDispatcher key handling", () => {
   test("emits an error event (no network call) when the provider key is absent", async () => {
     const { fn, calls } = fakeStreamText(["unused"]);
     // No keys: the cheap tier's anthropic model cannot resolve.
-    const dispatcher = new AiSdkDispatcher({ env: {}, streamText: fn });
+    const dispatcher = new AiSdkDispatcher({ env: {}, streamText: fn, config: heuristicConfig });
 
     const events = await collect(dispatcher.dispatch({ prompt: "hi", history: [] }));
 
@@ -91,7 +96,7 @@ describe("AiSdkDispatcher key handling", () => {
 describe("AiSdkDispatcher dispatch", () => {
   test("builds messages from the prompt context (injected system, history, prompt)", async () => {
     const { fn, calls } = fakeStreamText(["ok"]);
-    const dispatcher = new AiSdkDispatcher({ env: allKeys, streamText: fn });
+    const dispatcher = new AiSdkDispatcher({ env: allKeys, streamText: fn, config: heuristicConfig });
 
     const context: PromptContext = {
       history: [
@@ -117,7 +122,7 @@ describe("AiSdkDispatcher dispatch", () => {
 
   test("streams text incrementally as text-delta events", async () => {
     const { fn } = fakeStreamText(["Hel", "lo, ", "world"]);
-    const dispatcher = new AiSdkDispatcher({ env: allKeys, streamText: fn });
+    const dispatcher = new AiSdkDispatcher({ env: allKeys, streamText: fn, config: heuristicConfig });
 
     const received: string[] = [];
     for await (const event of dispatcher.dispatch({ prompt: "hi", history: [] })) {
