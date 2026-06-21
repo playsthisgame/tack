@@ -46,12 +46,13 @@ describe("AgentLoop — blocking advisory", () => {
 
     const events = await collect(loop);
 
-    // Only the advisory and the done signal — no routing, no text, no tools.
-    expect(events.map((e) => e.type)).toEqual(["advisory", "done"]);
-    const first = events[0]!;
-    expect(first.type).toBe("advisory");
-    if (first.type === "advisory") {
-      expect(first.advisory.kind).toBe("compaction-required");
+    // dispatching fires first (scoring is in progress), then the advisory and
+    // done — no routing, no text, no tools.
+    expect(events.map((e) => e.type)).toEqual(["dispatching", "advisory", "done"]);
+    const advisory = events[1]!;
+    expect(advisory.type).toBe("advisory");
+    if (advisory.type === "advisory") {
+      expect(advisory.advisory.kind).toBe("compaction-required");
     }
   });
 });

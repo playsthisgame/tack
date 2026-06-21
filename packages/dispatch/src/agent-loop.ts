@@ -30,11 +30,11 @@ export interface AgentLoopOptions {
   session?: SessionTracker;
 }
 
+// History + the new user prompt only. The system prompt is passed separately via
+// streamText's `system` option (not as a `role: "system"` message) — that's the
+// injection-safe channel the AI SDK expects, and avoids its system-in-messages warning.
 function toMessages(context: PromptContext): CoreMessage[] {
   const messages: CoreMessage[] = [];
-  if (context.system) {
-    messages.push({ role: "system", content: context.system });
-  }
   for (const m of context.history) {
     messages.push({ role: m.role as "user" | "assistant", content: m.content });
   }
@@ -68,6 +68,11 @@ export class AgentLoop {
       let messages: CoreMessage[] = toMessages(context);
 
       for (let step = 0; step < this.maxSteps; step++) {
+        // Signal that the loop is working: scoring, resolving the model, and
+        // waiting for the first token. The TUI uses this to keep the spinner
+        // visible between tool results and the next routing decision.
+        yield { type: "dispatching" };
+
         // Score the accumulated context for this step.
         const decision: RoutingDecision = await this.scorer.score({
           prompt: context.prompt,
@@ -100,6 +105,7 @@ export class AgentLoop {
         // default is also `stepCountIs(1)`; set it explicitly to keep that intent.)
         const result = this.streamText({
           model: languageModel,
+          system: context.system,
           messages,
           tools: this.tools,
           stopWhen: stepCountIs(1),

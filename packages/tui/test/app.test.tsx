@@ -101,6 +101,21 @@ describe("App", () => {
     expect(dispatched).toBe(false);
   });
 
+  test("^w toggles the rationale without leaking a 'w' into the input", async () => {
+    const { stdin, lastFrame } = render(<App services={makeServices()} />);
+    await submitPrompt(stdin, "refactor the auth module");
+    await waitFor(lastFrame, (f) => f.includes("Hello"));
+
+    // Rationale is hidden until toggled.
+    expect(lastFrame()).not.toContain('mentions "refactor"');
+
+    stdin.write("\x17"); // Ctrl-W
+    await waitFor(lastFrame, (f) => f.includes('mentions "refactor"'));
+
+    // The input buffer stayed empty (placeholder shows) — no stray "w" was typed.
+    expect(lastFrame()).toContain("ask anything…");
+  });
+
   test("dispatches after the key is provided and saves it", async () => {
     let savedKey: string | undefined;
     const env: Record<string, string> = {};

@@ -62,6 +62,13 @@ export function useTack(services: TackServices): TackState {
 
     for await (const event of services.dispatch(context)) {
       switch (event.type) {
+        case "dispatching":
+          // The loop is scoring and resolving the next model. Keep (or restore)
+          // the spinner so the user always sees activity while work is in progress.
+          setTurns((prev) =>
+            replace(prev, turnIndex, (t) => ({ ...t, inFlight: true })),
+          );
+          break;
         case "advisory":
           // Surface the latest advisory; it stays until the user dismisses it.
           setAdvisory(event.advisory);

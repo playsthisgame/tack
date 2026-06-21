@@ -26,8 +26,8 @@ const allKeys = {
  * so the loop terminates after a single step.
  */
 function fakeStreamText(chunks: string[]) {
-  const calls: { messages?: unknown }[] = [];
-  const fn = ((opts: { messages?: unknown }) => {
+  const calls: { messages?: unknown; system?: unknown }[] = [];
+  const fn = ((opts: { messages?: unknown; system?: unknown }) => {
     calls.push(opts);
     return {
       fullStream: (async function* () {
@@ -109,11 +109,12 @@ describe("AiSdkDispatcher dispatch", () => {
     await collect(dispatcher.dispatch(context));
 
     expect(calls.length).toBe(1);
+    // The environment system prompt goes through the dedicated `system` option, not
+    // as a `role: "system"` message; `messages` is the history then the new prompt.
+    expect(typeof calls[0]!.system).toBe("string");
+    expect((calls[0]!.system as string).length).toBeGreaterThan(0);
     const messages = calls[0]!.messages as { role: string; content: string }[];
-    // The dispatcher injects an environment system prompt as the first message;
-    // the rest is the history followed by the new user prompt, in order.
-    expect(messages[0]!.role).toBe("system");
-    expect(messages.slice(1)).toEqual([
+    expect(messages).toEqual([
       { role: "user", content: "first" },
       { role: "assistant", content: "reply" },
       { role: "user", content: "the new question" },

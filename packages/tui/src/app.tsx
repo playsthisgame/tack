@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
-import TextInput from "ink-text-input";
 import { defaultConfig, type Advisory, type RoutingDecision, type Tier } from "@tack/core";
 import { createServices, type TackServices } from "./services";
 import { useTack, type AgentStep, type Turn } from "./useTack";
@@ -213,6 +212,83 @@ function StatusBar({ turns, pending }: { turns: Turn[]; pending: boolean }): Rea
   );
 }
 
+/**
+ * A controlled single-line text input. We own key handling instead of using
+ * `ink-text-input` because Ink dispatches every `useInput` handler for each key
+ * (there is no way to consume an event), and `ink-text-input` inserts any
+ * `ctrl`/`meta`+letter it doesn't special-case — so e.g. `^w` leaks a literal
+ * "w" into the field. Here we explicitly ignore modifier combos, so app-level
+ * shortcuts like `^w` never reach the buffer regardless of handler ordering.
+ */
+function PromptInput({
+  value,
+  onChange,
+  onSubmit,
+  placeholder,
+  mask,
+  focus = true,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit?: (value: string) => void;
+  placeholder?: string;
+  mask?: string;
+  focus?: boolean;
+}): React.JSX.Element {
+  const [cursor, setCursor] = useState(value.length);
+  // The value is controlled, so it can change (e.g. cleared on submit) without a
+  // keypress; clamp the cursor into range every render rather than tracking it.
+  const pos = Math.min(cursor, value.length);
+
+  useInput(
+    (input, key) => {
+      if (key.return) {
+        onSubmit?.(value);
+        return;
+      }
+      // Never insert a character for a modifier combo or unhandled navigation —
+      // this is exactly the `^w` → "w" leak we are fixing.
+      if (key.ctrl || key.meta || key.tab || key.upArrow || key.downArrow || key.escape) {
+        return;
+      }
+      if (key.leftArrow) {
+        setCursor(Math.max(0, pos - 1));
+        return;
+      }
+      if (key.rightArrow) {
+        setCursor(Math.min(value.length, pos + 1));
+        return;
+      }
+      if (key.backspace || key.delete) {
+        if (pos > 0) {
+          onChange(value.slice(0, pos - 1) + value.slice(pos));
+          setCursor(pos - 1);
+        }
+        return;
+      }
+      // Printable input (a single char, or a whole string on paste).
+      if (input.length > 0) {
+        onChange(value.slice(0, pos) + input + value.slice(pos));
+        setCursor(pos + input.length);
+      }
+    },
+    { isActive: focus },
+  );
+
+  if (value.length === 0 && placeholder) {
+    return <Text dimColor>{placeholder}</Text>;
+  }
+
+  const shown = mask ? mask.repeat(value.length) : value;
+  return (
+    <Text>
+      {shown.slice(0, pos)}
+      <Text inverse>{shown.slice(pos, pos + 1) || " "}</Text>
+      {shown.slice(pos + 1)}
+    </Text>
+  );
+}
+
 function KeyPrompt(
   {
     provider,
@@ -230,12 +306,7 @@ function KeyPrompt(
       </Text>
       <Box>
         <Text color="yellow">key › </Text>
-        <TextInput
-          value={value}
-          onChange={setValue}
-          onSubmit={(v) => onSubmit(v)}
-          mask="*"
-        />
+        <PromptInput value={value} onChange={setValue} onSubmit={(v) => onSubmit(v)} mask="*" />
       </Box>
     </Box>
   );
@@ -247,11 +318,12 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
   const [input, setInput] = useState("");
   const { exit } = useApp();
 
+  // App-level shortcuts. `PromptInput` ignores ctrl/meta combos, so these never
+  // double as typed characters.
   useInput((char, key) => {
     if (key.ctrl && char === "w" && turns.length > 0) {
       toggleWhy(turns.length - 1);
-    }
-    if (key.ctrl && char === "d" && advisory) {
+    } else if (key.ctrl && char === "d" && advisory) {
       dismissAdvisory();
     }
   });
@@ -265,7 +337,7 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
         <KeyPrompt provider={pendingKey.provider} onSubmit={(key) => void provideKey(key)} />
       ) : (
         <Box borderStyle="round" borderColor="cyan">
-          <TextInput
+          <PromptInput
             value={input}
             onChange={setInput}
             onSubmit={(v) => {

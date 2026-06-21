@@ -227,6 +227,7 @@ export interface DecisionLog {
  * depend only on this union — nothing provider- or SDK-specific leaks out.
  */
 export type AgentEvent =
+  | { type: "dispatching" }
   | { type: "text-delta"; delta: string }
   | { type: "tool-call"; id: string; toolName: string; args: unknown }
   | { type: "tool-result"; id: string; toolName: string; result: string }

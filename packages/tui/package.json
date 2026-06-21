@@ -7,7 +7,6 @@
     "@tack/core": "workspace:*",
     "@tack/dispatch": "workspace:*",
     "ink": "^5.0.0",
-    "ink-text-input": "^6.0.0",
     "react": "^18.3.0"
   },
   "devDependencies": {
