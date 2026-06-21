@@ -17,6 +17,13 @@ describe("parseCommand", () => {
     });
   });
 
+  test("route passes its args through for the routing simulator", () => {
+    expect(parseCommand(["route", "--windows", "tiny", "fix typo"])).toEqual({
+      kind: "route",
+      args: ["--windows", "tiny", "fix typo"],
+    });
+  });
+
   test("help flags print usage, not the TUI", () => {
     expect(parseCommand(["--help"])).toEqual({ kind: "help" });
     expect(parseCommand(["-h"])).toEqual({ kind: "help" });

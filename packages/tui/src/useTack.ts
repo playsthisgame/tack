@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AgentEvent, PromptContext, RoutingDecision, Tier } from "@tack/core";
+import type { Advisory, AgentEvent, PromptContext, RoutingDecision, Tier } from "@tack/core";
 import { providerOf, type TackServices } from "./services";
 
 export interface ToolCallEntry {
@@ -36,9 +36,12 @@ export interface PendingKey {
 export interface TackState {
   turns: Turn[];
   pendingKey: PendingKey | null;
+  /** The most recent advisory, shown until dismissed. Informational only. */
+  advisory: Advisory | null;
   submit(input: string): Promise<void>;
   provideKey(key: string): Promise<void>;
   toggleWhy(index: number): void;
+  dismissAdvisory(): void;
 }
 
 function replace<T>(arr: T[], index: number, update: (item: T) => T): T[] {
@@ -52,12 +55,17 @@ function replaceStep(steps: AgentStep[], index: number, update: (s: AgentStep) =
 export function useTack(services: TackServices): TackState {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [pendingKey, setPendingKey] = useState<PendingKey | null>(null);
+  const [advisory, setAdvisory] = useState<Advisory | null>(null);
 
   async function runAgent(turnIndex: number, context: PromptContext): Promise<void> {
     let currentStep = -1;
 
     for await (const event of services.dispatch(context)) {
       switch (event.type) {
+        case "advisory":
+          // Surface the latest advisory; it stays until the user dismisses it.
+          setAdvisory(event.advisory);
+          break;
         case "routing": {
           currentStep = event.step;
           const newStep: AgentStep = {
@@ -176,5 +184,9 @@ export function useTack(services: TackServices): TackState {
     setTurns((prev) => replace(prev, index, (t) => ({ ...t, showWhy: !t.showWhy })));
   }
 
-  return { turns, pendingKey, submit, provideKey, toggleWhy };
+  function dismissAdvisory(): void {
+    setAdvisory(null);
+  }
+
+  return { turns, pendingKey, advisory, submit, provideKey, toggleWhy, dismissAdvisory };
 }

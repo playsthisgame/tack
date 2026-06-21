@@ -21,7 +21,8 @@ async function fileTree(cwd: string): Promise<string> {
     const entries = new Set<string>();
     for (const line of gitFiles.split("\n").filter(Boolean)) {
       const parts = line.split("/");
-      entries.add(parts.length === 1 ? parts[0] : `${parts[0]}/${parts[1]}${parts.length > 2 ? "/…" : ""}`);
+      const top = parts[0] ?? line;
+      entries.add(parts.length === 1 ? top : `${top}/${parts[1]}${parts.length > 2 ? "/…" : ""}`);
     }
     return [...entries].sort().join("\n");
   }

@@ -31,6 +31,33 @@ export interface ScoringConfig {
 
   /** User-assigned model per tier. Tack ships no hardcoded model list. */
   tierModels: Record<Tier, string>;
+
+  /**
+   * Context-window size (in tokens) of each tier's model. Used as a hard
+   * routing constraint: the router never selects a tier whose window cannot
+   * hold the measured context plus `responseHeadroom`. Tunable per deployment.
+   */
+  tierWindows: Record<Tier, number>;
+
+  /**
+   * Relative input cost per tier, in dollars per 1M tokens. Used only to
+   * estimate the extra spend caused by context-driven escalations; it does not
+   * affect routing. Tunable.
+   */
+  tierCostPer1M: Record<Tier, number>;
+
+  /**
+   * Tokens held in reserve out of each model's window for the response. A tier
+   * is feasible only when `tierWindows[tier] - responseHeadroom >= tokenCount`.
+   * Tunable.
+   */
+  responseHeadroom: number;
+
+  /**
+   * Number of cost-driven escalations in a session before the passive
+   * compaction advisory is surfaced. Tunable.
+   */
+  advisoryThreshold: number;
 }
 
 /**
@@ -74,4 +101,20 @@ export const defaultConfig: ScoringConfig = {
     mid: "anthropic/claude-sonnet-4-6",
     frontier: "anthropic/claude-opus-4-8",
   },
+  // Context windows of the default models above. Override these alongside
+  // `tierModels` whenever the assigned models change.
+  tierWindows: {
+    cheap: 200_000,
+    mid: 1_000_000,
+    frontier: 1_000_000,
+  },
+  // Input pricing ($/1M tokens) of the default models above, used only for the
+  // escalation-cost estimate shown in the advisory.
+  tierCostPer1M: {
+    cheap: 1,
+    mid: 3,
+    frontier: 5,
+  },
+  responseHeadroom: 8_000,
+  advisoryThreshold: 3,
 };

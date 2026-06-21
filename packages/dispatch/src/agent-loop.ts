@@ -1,5 +1,6 @@
 import { streamText as defaultStreamText, type CoreMessage } from "ai";
 import {
+  SessionTracker,
   type AgentEvent,
   type PromptContext,
   type RoutingDecision,
@@ -21,6 +22,12 @@ export interface AgentLoopOptions {
   env?: Record<string, string | undefined>;
   streamText?: StreamText;
   maxSteps?: number;
+  /**
+   * Tracks context-driven escalations across turns. One loop instance is reused
+   * for a whole session, so the tracker accumulates across user turns; an
+   * explicit tracker can be injected for tests.
+   */
+  session?: SessionTracker;
 }
 
 function toMessages(context: PromptContext): CoreMessage[] {
@@ -43,6 +50,7 @@ export class AgentLoop {
   private readonly env: Record<string, string | undefined>;
   private readonly streamText: StreamText;
   private readonly maxSteps: number;
+  private readonly session: SessionTracker;
 
   constructor(options: AgentLoopOptions) {
     this.scorer = options.scorer;
@@ -52,6 +60,7 @@ export class AgentLoop {
     this.env = options.env ?? process.env;
     this.streamText = options.streamText ?? defaultStreamText;
     this.maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+    this.session = options.session ?? new SessionTracker(this.config);
   }
 
   async *run(context: PromptContext): AsyncIterable<AgentEvent> {
@@ -65,6 +74,22 @@ export class AgentLoop {
           history: context.history,
           system: context.system,
         });
+
+        // Hard stop: if no model can hold the context, surface a blocking
+        // advisory and dispatch nothing. Tack never compacts on its own.
+        if (decision.exceedsAllWindows) {
+          yield { type: "advisory", advisory: this.session.blockingAdvisory(decision) };
+          yield { type: "done" };
+          return;
+        }
+
+        // Count context-driven escalations once per user turn (first step only),
+        // and surface the passive cost advisory if the threshold is crossed.
+        if (step === 0) {
+          const advisory = this.session.record(decision);
+          if (advisory) yield { type: "advisory", advisory };
+        }
+
         const model = this.config.tierModels[decision.tier];
         const languageModel = resolveModel(model, this.providerRegistry, this.env);
 

@@ -1,19 +1,31 @@
 import React from "react";
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import type { RoutingDecision } from "@tack/core";
+import type { AgentEvent, RoutingDecision } from "@tack/core";
 import { App, TurnView } from "../src/app";
 import type { TackServices } from "../src/services";
+import type { Turn } from "../src/useTack";
+
+const MODEL = "anthropic/claude-sonnet-4.6";
 
 const decision: RoutingDecision = {
   tier: "mid",
+  preferredTier: "mid",
+  escalated: false,
+  exceedsAllWindows: false,
   score: 3,
   contributions: [{ signal: "keyword:refactor", detail: 'mentions "refactor"', weight: 2 }],
   tokenCount: 5,
 };
 
-async function* gen(chunks: string[]): AsyncIterable<string> {
-  for (const c of chunks) yield c;
+/**
+ * A stand-in agent stream: one routing step, the given text chunks, then done —
+ * the shape `services.dispatch` now yields.
+ */
+async function* agentStream(chunks: string[]): AsyncIterable<AgentEvent> {
+  yield { type: "routing", step: 0, decision, model: MODEL };
+  for (const c of chunks) yield { type: "text-delta", delta: c };
+  yield { type: "done" };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -44,9 +56,9 @@ async function submitPrompt(stdin: { write(s: string): void }, text: string): Pr
 function makeServices(overrides: Partial<TackServices> = {}): TackServices {
   return {
     score: async () => decision,
-    modelFor: () => "anthropic/claude-sonnet-4.6",
+    modelFor: () => MODEL,
     log: () => {},
-    dispatch: async () => ({ textStream: gen(["Hel", "lo"]) }),
+    dispatch: () => agentStream(["Hel", "lo"]),
     resolveKey: () => "present",
     saveKey: () => {},
     ...overrides,
@@ -72,18 +84,18 @@ describe("App", () => {
     let dispatched = false;
     const services = makeServices({
       resolveKey: () => undefined,
-      dispatch: async () => {
+      dispatch: () => {
         dispatched = true;
-        return { textStream: gen(["should not run"]) };
+        return agentStream(["should not run"]);
       },
     });
     const { stdin, lastFrame } = render(<App services={services} />);
     await submitPrompt(stdin, "hello");
 
     await waitFor(lastFrame, (f) => f.includes("no API key"));
-    // Provider is named, the badge still shows, and dispatch never ran.
+    // The provider is named in the key prompt, and dispatch never ran (routing
+    // happens inside the agent loop, so no model badge shows pre-dispatch).
     expect(lastFrame()).toContain("anthropic");
-    expect(lastFrame()).toContain("anthropic/claude-sonnet-4.6");
     expect(dispatched).toBe(false);
   });
 
@@ -112,12 +124,11 @@ describe("App", () => {
 });
 
 describe("TurnView rationale toggle", () => {
-  const turn = {
+  const turn: Turn = {
     prompt: "refactor",
-    decision,
-    model: "anthropic/claude-sonnet-4.6",
-    response: "",
+    steps: [{ decision, model: MODEL, toolCalls: [], response: "" }],
     done: false,
+    inFlight: false,
     showWhy: false,
   };
 

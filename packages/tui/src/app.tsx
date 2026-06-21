@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { defaultConfig, type RoutingDecision, type Tier } from "@tack/core";
+import { defaultConfig, type Advisory, type RoutingDecision, type Tier } from "@tack/core";
 import { createServices, type TackServices } from "./services";
 import { useTack, type AgentStep, type Turn } from "./useTack";
 
@@ -12,6 +12,14 @@ const TIER_COLOR: Record<Tier, string> = {
 };
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+const TACK_ART = [
+  "████████   ██████    ██████   ██   ██",
+  "   ██     ██    ██  ██        ██  ██ ",
+  "   ██     ████████  ██        █████  ",
+  "   ██     ██    ██  ██        ██  ██ ",
+  "   ██     ██    ██   ██████   ██   ██",
+];
 
 function Spinner(): React.JSX.Element {
   const [frame, setFrame] = useState(0);
@@ -144,7 +152,14 @@ function WelcomePanel(): React.JSX.Element {
   const tiers = Object.entries(defaultConfig.tierModels) as [Tier, string][];
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold>tack — heuristic prompt router</Text>
+      <Box flexDirection="column">
+        {TACK_ART.map((line, i) => (
+          <Text key={i} color="cyan" bold>
+            {line}
+          </Text>
+        ))}
+        <Text dimColor>heuristic prompt router</Text>
+      </Box>
       <Box flexDirection="column" marginTop={1}>
         <Text dimColor>tier routing:</Text>
         {tiers.map(([tier, model]) => (
@@ -159,6 +174,25 @@ function WelcomePanel(): React.JSX.Element {
         <Text dimColor>  ^w   toggle routing rationale for last turn</Text>
         <Text dimColor>  ^c   quit</Text>
       </Box>
+    </Box>
+  );
+}
+
+function AdvisoryPanel({ advisory }: { advisory: Advisory }): React.JSX.Element {
+  const blocking = advisory.kind === "compaction-required";
+  return (
+    <Box
+      flexDirection="column"
+      marginBottom={1}
+      borderStyle="round"
+      borderColor={blocking ? "red" : "yellow"}
+      paddingX={1}
+    >
+      <Text color={blocking ? "red" : "yellow"} bold>
+        {blocking ? "⚠ compaction required" : "ℹ compaction advisory"}
+      </Text>
+      <Text>{advisory.message}</Text>
+      <Text dimColor>^d to dismiss</Text>
     </Box>
   );
 }
@@ -207,7 +241,8 @@ function KeyPrompt({
 }
 
 export function App({ services }: { services: TackServices }): React.JSX.Element {
-  const { turns, pendingKey, submit, provideKey, toggleWhy } = useTack(services);
+  const { turns, pendingKey, advisory, submit, provideKey, toggleWhy, dismissAdvisory } =
+    useTack(services);
   const [input, setInput] = useState("");
   const { exit } = useApp();
 
@@ -215,12 +250,16 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
     if (key.ctrl && char === "w" && turns.length > 0) {
       toggleWhy(turns.length - 1);
     }
+    if (key.ctrl && char === "d" && advisory) {
+      dismissAdvisory();
+    }
   });
 
   return (
     <Box flexDirection="column">
       {turns.length === 0 && pendingKey === null && <WelcomePanel />}
       <Transcript turns={turns} />
+      {advisory && <AdvisoryPanel advisory={advisory} />}
       {pendingKey ? (
         <KeyPrompt provider={pendingKey.provider} onSubmit={(key) => void provideKey(key)} />
       ) : (

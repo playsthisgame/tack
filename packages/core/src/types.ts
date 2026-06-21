@@ -44,13 +44,63 @@ export interface SignalContribution {
 
 /** The full, inspectable result of scoring one prompt. */
 export interface RoutingDecision {
+  /** The tier actually chosen, after the context-window feasibility check. */
   tier: Tier;
+  /**
+   * The tier complexity alone preferred, before feasibility. Equals `tier`
+   * unless a context-driven escalation occurred.
+   */
+  preferredTier: Tier;
+  /**
+   * True when `tier` was raised above `preferredTier` solely because the
+   * context did not fit the preferred tier's model window. A complexity-driven
+   * tier is NOT an escalation.
+   */
+  escalated: boolean;
+  /**
+   * True when the measured context exceeds every tier's window (minus
+   * headroom). `tier` is then the largest-window tier and dispatch should be
+   * blocked pending compaction.
+   */
+  exceedsAllWindows: boolean;
   score: number;
   /** Every signal that fired, for display and for logging. */
   contributions: SignalContribution[];
   /** Token count measured for this context (approximate for non-OpenAI models). */
   tokenCount: number;
 }
+
+/**
+ * Accumulated, per-session view of context-driven escalations. Complexity-driven
+ * routing is deliberately excluded — only escalations caused by context size are
+ * counted, because only those are addressable by compacting the conversation.
+ */
+export interface SessionStats {
+  /** Count of prompts whose preferred tier was overridden solely by context size. */
+  costEscalations: number;
+  /** Estimated extra spend (USD) those escalations incurred this session. */
+  estimatedExtraCost: number;
+}
+
+/**
+ * A passive, advisory-only signal surfaced to the user. Tack never acts on these
+ * itself — compaction (even in the blocking case) is always the user's call.
+ */
+export type Advisory =
+  | {
+      /** Cost-saving hint: compacting would let prompts route to a cheaper tier. */
+      kind: "compaction-savings";
+      escalations: number;
+      estimatedSaving: number;
+      message: string;
+    }
+  | {
+      /** Blocking: no model can hold the context; compaction is required first. */
+      kind: "compaction-required";
+      tokenCount: number;
+      largestWindow: number;
+      message: string;
+    };
 
 /**
  * The swap point. v1 = keyword heuristics. v2 = embedding centroids.
@@ -93,6 +143,7 @@ export type AgentEvent =
   | { type: "tool-call"; id: string; toolName: string; args: unknown }
   | { type: "tool-result"; id: string; toolName: string; result: string }
   | { type: "routing"; step: number; decision: RoutingDecision; model: string }
+  | { type: "advisory"; advisory: Advisory }
   | { type: "error"; message: string }
   | { type: "done" };
 

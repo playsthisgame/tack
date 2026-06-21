@@ -28,6 +28,12 @@ every prompt is impractical. Tack automates that choice.
   accuracy.
 - Acting as a transparent proxy in front of existing tools (this is Phase 2; see
   Architecture).
+- **Automatic compaction.** Context-window size is a hard routing constraint
+  (see Mapping), and Tack will *advise* when compacting the conversation would
+  unlock cheaper routing or is required to proceed at all — but Tack never
+  summarizes or drops context on its own. Compaction is lossy; the action stays
+  with the user. Performing a compaction (even user-initiated) is a separate
+  future change.
 
 ## Architecture
 
@@ -73,6 +79,14 @@ spec, because they are expected to evolve through tuning. Conceptually they incl
 The user assigns concrete models to each tier in configuration; Tack itself is
 model-agnostic and ships no hardcoded model list. A prompt scoring low routes to
 the user's cheap-tier model; a high score routes to their frontier-tier model.
+
+The mapped tier is *preferred*, not final. A feasibility step then guarantees the
+chosen model's context window can actually hold the measured context (plus a
+response-headroom reserve); if not, routing escalates to the smallest tier that
+can. Context-driven escalations are tracked per session and, past a threshold,
+surface a passive advisory that compaction would restore cheaper routing — and a
+blocking advisory when no model can hold the context. Tack only ever advises;
+auto-compaction is out of scope (see Non-Goals).
 
 **Inspectability.** Every routing decision records which signals fired and their
 contribution to the score, so the TUI can show, e.g., "routed to frontier:

@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { streamText as StreamTextFn } from "ai";
-import type { PromptContext } from "@tack/core";
+import type { AgentEvent, PromptContext } from "@tack/core";
 import {
   AiSdkDispatcher,
-  MissingApiKeyError,
   UnknownProviderError,
   parseModelString,
   resolveModel,
@@ -16,20 +15,30 @@ const allKeys = {
 };
 
 /**
- * A stand-in for the AI SDK's `streamText` that records its options and yields
- * the given chunks — so dispatch can be tested without any network call.
+ * A stand-in for the AI SDK's `streamText` that records its options and emits
+ * the given chunks as `fullStream` text-delta events — so the agentic dispatch
+ * loop can be tested without any network call. No tool-call events are emitted,
+ * so the loop terminates after a single step.
  */
 function fakeStreamText(chunks: string[]) {
   const calls: { messages?: unknown }[] = [];
   const fn = ((opts: { messages?: unknown }) => {
     calls.push(opts);
     return {
-      textStream: (async function* () {
-        for (const c of chunks) yield c;
+      fullStream: (async function* () {
+        for (const c of chunks) yield { type: "text-delta", textDelta: c };
       })(),
+      response: Promise.resolve({ messages: [] }),
     };
   }) as unknown as typeof StreamTextFn;
   return { fn, calls };
+}
+
+/** Drain an AgentEvent stream into an array. */
+async function collect(stream: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  for await (const e of stream) events.push(e);
+  return events;
 }
 
 describe("parseModelString + resolveModel", () => {
@@ -61,27 +70,30 @@ describe("parseModelString + resolveModel", () => {
 });
 
 describe("AiSdkDispatcher key handling", () => {
-  test("fails fast with MissingApiKeyError when the key is absent, no network call", async () => {
+  test("emits an error event (no network call) when the provider key is absent", async () => {
     const { fn, calls } = fakeStreamText(["unused"]);
+    // No keys: the cheap tier's anthropic model cannot resolve.
     const dispatcher = new AiSdkDispatcher({ env: {}, streamText: fn });
 
-    await expect(
-      dispatcher.dispatch("anthropic/claude-sonnet-4.6", {
-        prompt: "hi",
-        history: [],
-      }),
-    ).rejects.toBeInstanceOf(MissingApiKeyError);
+    const events = await collect(dispatcher.dispatch({ prompt: "hi", history: [] }));
+
+    // The loop surfaces the missing key as an error event rather than throwing,
+    // and never reaches the model call.
     expect(calls.length).toBe(0);
+    const error = events.find((e) => e.type === "error");
+    expect(error).toBeDefined();
+    expect((error as Extract<AgentEvent, { type: "error" }>).message).toContain(
+      "ANTHROPIC_API_KEY",
+    );
   });
 });
 
 describe("AiSdkDispatcher dispatch", () => {
-  test("builds messages from the prompt context (system, history, prompt)", async () => {
+  test("builds messages from the prompt context (injected system, history, prompt)", async () => {
     const { fn, calls } = fakeStreamText(["ok"]);
     const dispatcher = new AiSdkDispatcher({ env: allKeys, streamText: fn });
 
     const context: PromptContext = {
-      system: "you are terse",
       history: [
         { role: "user", content: "first" },
         { role: "assistant", content: "reply" },
@@ -89,28 +101,28 @@ describe("AiSdkDispatcher dispatch", () => {
       prompt: "the new question",
     };
 
-    await dispatcher.dispatch("anthropic/claude-sonnet-4.6", context);
+    await collect(dispatcher.dispatch(context));
 
     expect(calls.length).toBe(1);
-    expect(calls[0]!.messages).toEqual([
-      { role: "system", content: "you are terse" },
+    const messages = calls[0]!.messages as { role: string; content: string }[];
+    // The dispatcher injects an environment system prompt as the first message;
+    // the rest is the history followed by the new user prompt, in order.
+    expect(messages[0]!.role).toBe("system");
+    expect(messages.slice(1)).toEqual([
       { role: "user", content: "first" },
       { role: "assistant", content: "reply" },
       { role: "user", content: "the new question" },
     ]);
   });
 
-  test("streams text incrementally as an async iterable of strings", async () => {
+  test("streams text incrementally as text-delta events", async () => {
     const { fn } = fakeStreamText(["Hel", "lo, ", "world"]);
     const dispatcher = new AiSdkDispatcher({ env: allKeys, streamText: fn });
 
-    const { textStream } = await dispatcher.dispatch("openai/gpt-4o", {
-      prompt: "hi",
-      history: [],
-    });
-
     const received: string[] = [];
-    for await (const chunk of textStream) received.push(chunk);
+    for await (const event of dispatcher.dispatch({ prompt: "hi", history: [] })) {
+      if (event.type === "text-delta") received.push(event.delta);
+    }
 
     expect(received).toEqual(["Hel", "lo, ", "world"]);
     expect(received.join("")).toBe("Hello, world");

@@ -1,16 +1,20 @@
 #!/usr/bin/env bun
 import { dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import {
   BpeTokenizer,
   defaultConfig,
   HeuristicScorer,
+  simulateRoute,
   SqliteDecisionLog,
   type PromptContext,
   type RoutingDecision,
+  type ScoringConfig,
+  type Tier,
 } from "@tack/core";
 import {
   AiSdkDispatcher,
+  buildSystemPrompt,
   MissingApiKeyError,
   UnknownProviderError,
 } from "@tack/dispatch";
@@ -47,8 +51,18 @@ function logDecision(
   }
 }
 
+function tierLine(d: RoutingDecision): string {
+  if (d.exceedsAllWindows) {
+    return `${d.tier} (preferred ${d.preferredTier}, exceeds all windows)`;
+  }
+  if (d.escalated) {
+    return `${d.tier} (preferred ${d.preferredTier}, escalated for context size)`;
+  }
+  return d.tier;
+}
+
 function printDecision(d: RoutingDecision, model: string): void {
-  console.log(`\ntier:    ${d.tier}`);
+  console.log(`\ntier:    ${tierLine(d)}`);
   console.log(`model:   ${model}`);
   console.log(`score:   ${d.score}`);
   console.log(`tokens:  ${d.tokenCount}`);
@@ -78,10 +92,19 @@ async function cmdDispatch(prompt: string, log: boolean): Promise<void> {
   const dispatcher = new AiSdkDispatcher();
 
   let firstStep = true;
+  let blocked = false;
 
   try {
     for await (const event of dispatcher.dispatch(context)) {
       switch (event.type) {
+        case "advisory":
+          if (event.advisory.kind === "compaction-required") {
+            blocked = true;
+            process.stderr.write(`\n[blocked] ${event.advisory.message}\n`);
+          } else {
+            process.stderr.write(`\n[advisory] ${event.advisory.message}\n`);
+          }
+          break;
         case "routing":
           if (firstStep) {
             printDecision(event.decision, event.model);
@@ -112,6 +135,7 @@ async function cmdDispatch(prompt: string, log: boolean): Promise<void> {
           break;
         case "done":
           process.stdout.write("\n");
+          if (blocked) process.exit(1);
           break;
       }
     }
@@ -125,6 +149,144 @@ async function cmdDispatch(prompt: string, log: boolean): Promise<void> {
   }
 }
 
+// A demo preset for `route`: the cheap window is so small that any real phrase
+// (≥2 tokens) escalates past it, mid holds short prompts, and a ~80+ token block
+// exceeds every window — so escalation, the advisory, and the blocking case are all
+// reachable with normal hand-typed prompts.
+const TINY_WINDOWS: Record<Tier, number> = { cheap: 1, mid: 40, frontier: 80 };
+const TINY_HEADROOM = 0;
+
+interface RouteWindows {
+  tierWindows: Record<Tier, number>;
+  responseHeadroom: number;
+}
+
+/**
+ * Resolve a `--windows` spec into per-tier window sizes AND a coherent response
+ * headroom. Accepts the `tiny` preset (small windows so escalation triggers on
+ * short inputs) or an explicit `cheap=..,mid=..,frontier=..` list; tiers omitted
+ * from a list keep the default. The headroom is clamped below the smallest window
+ * so feasibility stays meaningful (the default 8000 would otherwise sink tiny
+ * windows negative and block every prompt). An explicit `headroom` wins.
+ */
+function parseWindows(
+  spec: string | undefined,
+  base: RouteWindows,
+  headroomOverride: number | undefined,
+): RouteWindows {
+  let tierWindows = base.tierWindows;
+  let responseHeadroom = base.responseHeadroom;
+
+  if (spec === "tiny") {
+    tierWindows = { ...TINY_WINDOWS };
+    responseHeadroom = TINY_HEADROOM;
+  } else if (spec) {
+    tierWindows = { ...base.tierWindows };
+    for (const pair of spec.split(",")) {
+      const [tier, value] = pair.split("=");
+      const n = Number(value);
+      if ((tier === "cheap" || tier === "mid" || tier === "frontier") && Number.isFinite(n)) {
+        tierWindows[tier] = n;
+      } else {
+        console.error(`error: invalid --windows entry "${pair}" (expected tier=number)`);
+        process.exit(1);
+      }
+    }
+    // Keep headroom below the smallest window so a non-empty context can fit.
+    const smallest = Math.min(...Object.values(tierWindows));
+    responseHeadroom = Math.min(responseHeadroom, Math.floor(smallest / 2));
+  }
+
+  if (headroomOverride !== undefined) responseHeadroom = headroomOverride;
+  return { tierWindows, responseHeadroom };
+}
+
+/** Collect prompts for `route`: positional args, a `--file`, or stdin (one per line). */
+function routePrompts(positional: string[], file: string | undefined): string[] {
+  if (positional.length > 0) return positional;
+  const raw = file ? readFileSync(file, "utf8") : readStdinSync();
+  return raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+
+async function cmdRoute(args: string[]): Promise<void> {
+  // Parse flags; everything else is a literal prompt.
+  let windowsSpec: string | undefined;
+  let headroomOverride: number | undefined;
+  let file: string | undefined;
+  let accumulate = false;
+  let why = false;
+  let withContext = false;
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--windows") windowsSpec = args[++i];
+    else if (a === "--headroom") headroomOverride = Number(args[++i]);
+    else if (a === "--file") file = args[++i];
+    else if (a === "--accumulate") accumulate = true;
+    else if (a === "--why" || a === "-v") why = true;
+    else if (a === "--context") withContext = true;
+    else positional.push(a);
+  }
+
+  const prompts = routePrompts(positional, file);
+  if (prompts.length === 0) {
+    console.error("error: no prompts provided (pass them as arguments, --file, or stdin)");
+    process.exit(1);
+  }
+
+  const { tierWindows, responseHeadroom } = parseWindows(
+    windowsSpec,
+    { tierWindows: defaultConfig.tierWindows, responseHeadroom: defaultConfig.responseHeadroom },
+    headroomOverride,
+  );
+  const config: ScoringConfig = { ...defaultConfig, tierWindows, responseHeadroom };
+
+  // Optionally inject the same environment system prompt real dispatch sends
+  // (cwd, file tree, git context) so the simulated token count and routing match.
+  let system: string | undefined;
+  if (withContext) {
+    system = await buildSystemPrompt();
+    const tokens = new BpeTokenizer().count(system);
+    console.log(`context: injecting environment system prompt (${tokens} tokens — cwd, file tree, git)\n`);
+  }
+
+  // Pure simulation — no dispatch, no network, no API key, no logging.
+  const { turns, stats } = await simulateRoute(prompts, config, { accumulate, system });
+
+  turns.forEach((turn, i) => {
+    const d = turn.decision;
+    const tag = d.exceedsAllWindows ? "exceeds all windows" : d.escalated ? "escalated" : "—";
+    const route = d.preferredTier === d.tier ? d.tier : `${d.preferredTier}→${d.tier}`;
+    console.log(
+      `[${i + 1}] ${route.padEnd(16)} ${tag.padEnd(20)} (score ${d.score}, context ${d.tokenCount} tokens)`,
+    );
+    if (why) {
+      // The signal breakdown that drove the complexity score → preferred tier.
+      // Context-driven escalations (if any) appear here too as weight-0 entries.
+      if (d.contributions.length === 0) {
+        console.log(`        why: (no signals fired — baseline cheap)`);
+      } else {
+        for (const c of d.contributions) {
+          const sign = c.weight >= 0 ? "+" : "";
+          console.log(`        ${sign}${c.weight}  ${c.detail}`);
+        }
+      }
+    }
+    if (turn.advisory) {
+      const label = turn.advisory.kind === "compaction-required" ? "BLOCKED" : "ADVISORY";
+      console.log(`      ${label}: ${turn.advisory.message}`);
+    }
+  });
+
+  console.log(
+    `\nsession: ${stats.costEscalations} context-driven escalation(s), ` +
+      `est. extra cost ~$${stats.estimatedExtraCost.toFixed(4)}`,
+  );
+}
+
 function usage(): void {
   console.log(`tack — heuristic prompt router (POC)
 
@@ -133,9 +295,22 @@ usage:
   tack score "<prompt>"      score a prompt and show the routing decision
   echo "<prompt>" | tack score
   tack dispatch "<prompt>"   score, then call the routed model and stream output
+  tack route "<p1>" "<p2>"   simulate routing for a sequence of prompts without
+                             dispatching (no tokens, no API key) — shows tier
+                             escalations and the compaction advisory
 
 options:
-  --no-log                   do not persist the decision to the SQLite log
+  --no-log                   do not persist the decision to the SQLite log (score/dispatch)
+  --why, -v                  route: show the signal breakdown behind each decision
+  --context                  route: inject the real environment system prompt (cwd,
+                             file tree, git) so token counts match what dispatch sends
+  --windows <spec>           route: override tier context windows. "tiny" for a small
+                             preset, or "cheap=50,mid=500,frontier=1000"
+  --headroom <n>             route: response-headroom reserve (tokens) subtracted from
+                             each window when testing feasibility
+  --file <path>              route: read newline-separated prompts from a file
+  --accumulate               route: grow conversation history each turn so context size
+                             rises turn-over-turn
 
 env:
   TACK_DB_PATH               override the log database path
@@ -150,6 +325,7 @@ export type Command =
   | { kind: "tui" }
   | { kind: "help" }
   | { kind: "score" | "dispatch"; args: string[] }
+  | { kind: "route"; args: string[] }
   | { kind: "unknown"; cmd: string };
 
 export function parseCommand(argv: string[]): Command {
@@ -163,6 +339,8 @@ export function parseCommand(argv: string[]): Command {
     case "score":
     case "dispatch":
       return { kind: cmd, args: rest };
+    case "route":
+      return { kind: "route", args: rest };
     default:
       return { kind: "unknown", cmd };
   }
@@ -196,6 +374,9 @@ if (import.meta.main) {
     case "score":
     case "dispatch":
       await runScoreOrDispatch(command.kind, command.args);
+      break;
+    case "route":
+      await cmdRoute(command.args);
       break;
     case "unknown":
       console.error(`unknown command: ${command.cmd}`);
