@@ -37,6 +37,7 @@
         "@ai-sdk/openai": "^1.0.0",
         "@tack/core": "workspace:*",
         "ai": "^4.0.0",
+        "zod": "^3.0.0",
       },
     },
     "packages/tui": {

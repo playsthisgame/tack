@@ -3,7 +3,7 @@ import { Box, render, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { defaultConfig, type RoutingDecision, type Tier } from "@tack/core";
 import { createServices, type TackServices } from "./services";
-import { useTack, type Turn } from "./useTack";
+import { useTack, type AgentStep, type Turn } from "./useTack";
 
 const TIER_COLOR: Record<Tier, string> = {
   cheap: "green",
@@ -22,8 +22,7 @@ function Spinner(): React.JSX.Element {
   return <Text color="cyan">{SPINNER_FRAMES[frame]}</Text>;
 }
 
-/** "frontier · anthropic/claude-opus-4.8" — the routed tier and model. */
-export function ModelBadge({ tier, model }: { tier: Tier; model: string }): React.JSX.Element {
+function ModelBadge({ tier, model }: { tier: Tier; model: string }): React.JSX.Element {
   return (
     <Text>
       <Text color={TIER_COLOR[tier]}>{tier}</Text>
@@ -32,8 +31,7 @@ export function ModelBadge({ tier, model }: { tier: Tier; model: string }): Reac
   );
 }
 
-/** The signal breakdown — shown on demand so the transcript stays readable. */
-export function Why({ decision }: { decision: RoutingDecision }): React.JSX.Element {
+function Why({ decision }: { decision: RoutingDecision }): React.JSX.Element {
   return (
     <Box flexDirection="column" marginLeft={2}>
       <Text dimColor>why (score {decision.score}):</Text>
@@ -52,6 +50,56 @@ export function Why({ decision }: { decision: RoutingDecision }): React.JSX.Elem
   );
 }
 
+function ToolCallView({ toolName, args, result }: { toolName: string; args: unknown; result?: string }): React.JSX.Element {
+  const argStr = JSON.stringify(args);
+  const brief = argStr.length > 80 ? argStr.slice(0, 80) + "…" : argStr;
+  return (
+    <Box flexDirection="column" marginLeft={2}>
+      <Text dimColor>
+        <Text color="cyan">⚙ </Text>
+        {toolName}({brief})
+      </Text>
+      {result !== undefined && (
+        <Text dimColor>
+          {"  ↳ "}
+          {result.slice(0, 120).replace(/\n/g, "↵")}
+          {result.length > 120 ? "…" : ""}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+function StepView({ step, showWhy, isLast, inFlight }: {
+  step: AgentStep;
+  showWhy: boolean;
+  isLast: boolean;
+  inFlight: boolean;
+}): React.JSX.Element {
+  const responseText = step.response;
+  return (
+    <Box flexDirection="column">
+      <Box marginLeft={2}>
+        <ModelBadge tier={step.decision.tier} model={step.model} />
+      </Box>
+      {showWhy && <Why decision={step.decision} />}
+      {step.toolCalls.map((tc) => (
+        <ToolCallView key={tc.id} toolName={tc.toolName} args={tc.args} result={tc.result} />
+      ))}
+      {isLast && inFlight && step.toolCalls.length === 0 && responseText.length === 0 && (
+        <Box marginLeft={2}>
+          <Spinner />
+        </Box>
+      )}
+      {responseText.length > 0 && (
+        <Box marginLeft={2}>
+          <Text>{responseText}</Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 export function TurnView({ turn }: { turn: Turn }): React.JSX.Element {
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -59,18 +107,18 @@ export function TurnView({ turn }: { turn: Turn }): React.JSX.Element {
         <Text color="cyan">› </Text>
         {turn.prompt}
       </Text>
-      <Box marginLeft={2}>
-        <ModelBadge tier={turn.decision.tier} model={turn.model} />
-      </Box>
-      {turn.showWhy && <Why decision={turn.decision} />}
-      {turn.inFlight && turn.response.length === 0 && (
+      {turn.steps.map((step, i) => (
+        <StepView
+          key={i}
+          step={step}
+          showWhy={turn.showWhy}
+          isLast={i === turn.steps.length - 1}
+          inFlight={turn.inFlight}
+        />
+      ))}
+      {turn.inFlight && turn.steps.length === 0 && (
         <Box marginLeft={2}>
           <Spinner />
-        </Box>
-      )}
-      {turn.response.length > 0 && (
-        <Box marginLeft={2}>
-          <Text>{turn.response}</Text>
         </Box>
       )}
       {turn.error && (
@@ -117,13 +165,14 @@ function WelcomePanel(): React.JSX.Element {
 
 function StatusBar({ turns, pending }: { turns: Turn[]; pending: boolean }): React.JSX.Element {
   const last = turns[turns.length - 1];
+  const lastStep = last?.steps[last.steps.length - 1];
   return (
     <Box marginTop={1}>
       <Text dimColor>
         {pending
           ? "awaiting API key"
-          : last
-            ? `last: ${last.decision.tier} · ${last.model}`
+          : lastStep
+            ? `last: ${lastStep.decision.tier} · ${lastStep.model}`
             : "type a prompt to route it"}
         {"  —  ^w why · ^c quit"}
       </Text>
@@ -131,7 +180,6 @@ function StatusBar({ turns, pending }: { turns: Turn[]; pending: boolean }): Rea
   );
 }
 
-/** Inline key entry shown only when the routed model's provider key is missing. */
 function KeyPrompt({
   provider,
   onSubmit,
@@ -193,7 +241,6 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
   );
 }
 
-/** Render the TUI. Defaults to the real wired services; tests inject fakes. */
 export function runTui(services: TackServices = createServices()) {
   return render(<App services={services} />);
 }

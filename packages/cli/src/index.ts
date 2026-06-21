@@ -1,12 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Tack CLI — Phase 1 entry point.
- *
- * For the POC the most valuable command is `score`: it runs the heuristic
- * scorer against a prompt and prints the routing decision WITH the full signal
- * breakdown. This needs no API keys and is how you sanity-check routing while
- * tuning weights. Dispatch (actually calling a model) comes in a later change.
- */
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import {
@@ -33,15 +25,10 @@ function readStdinSync(): string {
   }
 }
 
-/** Resolve the log database path: explicit arg → TACK_DB_PATH env → default. */
 function resolveDbPath(explicit?: string): string {
   return explicit ?? process.env.TACK_DB_PATH ?? DEFAULT_DB_PATH;
 }
 
-/**
- * Best-effort decision logging shared by `score` and `dispatch`. A bad DB path
- * must never swallow or block the decision the user already saw.
- */
 function logDecision(
   context: PromptContext,
   decision: RoutingDecision,
@@ -60,7 +47,6 @@ function logDecision(
   }
 }
 
-/** Print the routing decision header — the inspectable "why" before any output. */
 function printDecision(d: RoutingDecision, model: string): void {
   console.log(`\ntier:    ${d.tier}`);
   console.log(`model:   ${model}`);
@@ -88,22 +74,47 @@ async function cmdScore(prompt: string, log: boolean): Promise<void> {
 }
 
 async function cmdDispatch(prompt: string, log: boolean): Promise<void> {
-  const scorer = new HeuristicScorer(defaultConfig, new BpeTokenizer());
   const context: PromptContext = { prompt, history: [] };
-  const d = await scorer.score(context);
-  const model = defaultConfig.tierModels[d.tier];
-
-  // Show why (and which model, i.e. which cost tier) before streaming output.
-  printDecision(d, model);
-  logDecision(context, d, model, log);
-
   const dispatcher = new AiSdkDispatcher();
+
+  let firstStep = true;
+
   try {
-    const { textStream } = await dispatcher.dispatch(model, context);
-    for await (const chunk of textStream) {
-      process.stdout.write(chunk);
+    for await (const event of dispatcher.dispatch(context)) {
+      switch (event.type) {
+        case "routing":
+          if (firstStep) {
+            printDecision(event.decision, event.model);
+            logDecision(context, event.decision, event.model, log);
+            firstStep = false;
+          } else {
+            process.stderr.write(
+              `[step ${event.step}] ${event.decision.tier} · ${event.model} (score ${event.decision.score})\n`,
+            );
+          }
+          break;
+        case "text-delta":
+          process.stdout.write(event.delta);
+          break;
+        case "tool-call":
+          process.stderr.write(
+            `[tool] ${event.toolName}(${JSON.stringify(event.args).slice(0, 120)})\n`,
+          );
+          break;
+        case "tool-result":
+          process.stderr.write(
+            `[result] ${event.toolName}: ${String(event.result).slice(0, 120).replace(/\n/g, "↵")}\n`,
+          );
+          break;
+        case "error":
+          console.error(`error: ${event.message}`);
+          process.exit(1);
+          break;
+        case "done":
+          process.stdout.write("\n");
+          break;
+      }
     }
-    process.stdout.write("\n");
   } catch (err) {
     if (err instanceof MissingApiKeyError || err instanceof UnknownProviderError) {
       console.error(`error: ${err.message}`);
@@ -141,11 +152,6 @@ export type Command =
   | { kind: "score" | "dispatch"; args: string[] }
   | { kind: "unknown"; cmd: string };
 
-/**
- * Pure routing: map argv (without the node/script prefix) to a command. No
- * subcommand means launch the TUI; this is what makes bare `tack` interactive.
- * Kept side-effect-free so it can be tested without executing anything.
- */
 export function parseCommand(argv: string[]): Command {
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -176,13 +182,10 @@ async function runScoreOrDispatch(kind: "score" | "dispatch", args: string[]): P
   }
 }
 
-// Only execute when run as the `tack` entry point — importing this module (e.g.
-// from tests for `parseCommand`) must not trigger a command.
 if (import.meta.main) {
   const command = parseCommand(process.argv.slice(2));
   switch (command.kind) {
     case "tui": {
-      // Imported lazily so `score`/`dispatch` never load Ink/React.
       const { runTui } = await import("@tack/tui");
       runTui();
       break;

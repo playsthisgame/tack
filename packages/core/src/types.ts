@@ -84,29 +84,23 @@ export interface DecisionLog {
   close(): void;
 }
 
-/** The streamed result of dispatching a prompt to a model. */
-export interface DispatchResult {
-  /**
-   * The model's response, yielded incrementally as text chunks arrive. Kept as
-   * a plain async iterable of strings so consumers (CLI, future TUI) depend on
-   * nothing provider- or SDK-specific.
-   */
-  textStream: AsyncIterable<string>;
-}
+/**
+ * Typed events emitted by the agentic dispatch loop. Consumers (CLI, TUI)
+ * depend only on this union — nothing provider- or SDK-specific leaks out.
+ */
+export type AgentEvent =
+  | { type: "text-delta"; delta: string }
+  | { type: "tool-call"; id: string; toolName: string; args: unknown }
+  | { type: "tool-result"; id: string; toolName: string; result: string }
+  | { type: "routing"; step: number; decision: RoutingDecision; model: string }
+  | { type: "error"; message: string }
+  | { type: "done" };
 
 /**
- * The delivery swap point: turns a chosen model + context into a streaming
- * response. Like `Scorer`/`Tokenizer`/`DecisionLog`, the interface lives in
- * `core` as pure types — no provider or AI SDK code. The concrete
- * implementation (e.g. an AI SDK dispatcher) lives outside `core` so the
- * scoring engine stays provider-free.
+ * The delivery swap point: turns a context into an async stream of agent
+ * events. Like `Scorer`/`Tokenizer`/`DecisionLog`, the interface lives in
+ * `core` as pure types so the scoring engine stays provider-free.
  */
 export interface Dispatcher {
-  /**
-   * Call `model` (a `provider/model` string, e.g. `anthropic/claude-sonnet-4.6`)
-   * with the given context and return a streaming result. Implementations
-   * SHALL reject before any network call if the model string is malformed, the
-   * provider is unsupported, or its API key is absent.
-   */
-  dispatch(model: string, context: PromptContext): Promise<DispatchResult>;
+  dispatch(context: PromptContext): AsyncIterable<AgentEvent>;
 }

@@ -1,13 +1,25 @@
 import { useState } from "react";
-import type { PromptContext, RoutingDecision } from "@tack/core";
+import type { AgentEvent, PromptContext, RoutingDecision, Tier } from "@tack/core";
 import { providerOf, type TackServices } from "./services";
 
-/** One exchange in the session: a prompt, its routing decision, and the response. */
-export interface Turn {
-  prompt: string;
+export interface ToolCallEntry {
+  id: string;
+  toolName: string;
+  args: unknown;
+  result?: string;
+}
+
+export interface AgentStep {
   decision: RoutingDecision;
   model: string;
+  toolCalls: ToolCallEntry[];
   response: string;
+}
+
+/** One exchange in the session: a prompt, its agentic steps, and final state. */
+export interface Turn {
+  prompt: string;
+  steps: AgentStep[];
   done: boolean;
   inFlight: boolean;
   showWhy: boolean;
@@ -17,7 +29,6 @@ export interface Turn {
 /** A dispatch deferred because the routed model's provider key is missing. */
 export interface PendingKey {
   provider: string;
-  model: string;
   context: PromptContext;
   turnIndex: number;
 }
@@ -34,32 +45,90 @@ function replace<T>(arr: T[], index: number, update: (item: T) => T): T[] {
   return arr.map((item, i) => (i === index ? update(item) : item));
 }
 
+function replaceStep(steps: AgentStep[], index: number, update: (s: AgentStep) => AgentStep): AgentStep[] {
+  return steps.map((s, i) => (i === index ? update(s) : s));
+}
+
 export function useTack(services: TackServices): TackState {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [pendingKey, setPendingKey] = useState<PendingKey | null>(null);
 
-  async function streamInto(turnIndex: number, model: string, context: PromptContext): Promise<void> {
-    try {
-      const { textStream } = await services.dispatch(model, context);
-      for await (const chunk of textStream) {
-        setTurns((prev) =>
-          replace(prev, turnIndex, (t) => ({
-            ...t,
-            inFlight: false,
-            response: t.response + chunk,
-          })),
-        );
+  async function runAgent(turnIndex: number, context: PromptContext): Promise<void> {
+    let currentStep = -1;
+
+    for await (const event of services.dispatch(context)) {
+      switch (event.type) {
+        case "routing": {
+          currentStep = event.step;
+          const newStep: AgentStep = {
+            decision: event.decision,
+            model: event.model,
+            toolCalls: [],
+            response: "",
+          };
+          setTurns((prev) =>
+            replace(prev, turnIndex, (t) => {
+              // Log decision for the first step only.
+              if (event.step === 0) {
+                services.log(context, event.decision, event.model);
+              }
+              return { ...t, steps: [...t.steps, newStep] };
+            }),
+          );
+          break;
+        }
+        case "text-delta":
+          setTurns((prev) =>
+            replace(prev, turnIndex, (t) => ({
+              ...t,
+              inFlight: false,
+              steps: replaceStep(t.steps, currentStep, (s) => ({
+                ...s,
+                response: s.response + event.delta,
+              })),
+            })),
+          );
+          break;
+        case "tool-call":
+          setTurns((prev) =>
+            replace(prev, turnIndex, (t) => ({
+              ...t,
+              steps: replaceStep(t.steps, currentStep, (s) => ({
+                ...s,
+                toolCalls: [...s.toolCalls, { id: event.id, toolName: event.toolName, args: event.args }],
+              })),
+            })),
+          );
+          break;
+        case "tool-result":
+          setTurns((prev) =>
+            replace(prev, turnIndex, (t) => ({
+              ...t,
+              steps: replaceStep(t.steps, currentStep, (s) => ({
+                ...s,
+                toolCalls: s.toolCalls.map((tc) =>
+                  tc.id === event.id ? { ...tc, result: event.result } : tc,
+                ),
+              })),
+            })),
+          );
+          break;
+        case "error":
+          setTurns((prev) =>
+            replace(prev, turnIndex, (t) => ({
+              ...t,
+              done: true,
+              inFlight: false,
+              error: event.message,
+            })),
+          );
+          break;
+        case "done":
+          setTurns((prev) =>
+            replace(prev, turnIndex, (t) => ({ ...t, done: true, inFlight: false })),
+          );
+          break;
       }
-      setTurns((prev) => replace(prev, turnIndex, (t) => ({ ...t, done: true, inFlight: false })));
-    } catch (err) {
-      setTurns((prev) =>
-        replace(prev, turnIndex, (t) => ({
-          ...t,
-          done: true,
-          inFlight: false,
-          error: (err as Error).message,
-        })),
-      );
     }
   }
 
@@ -67,40 +136,40 @@ export function useTack(services: TackServices): TackState {
     const prompt = input.trim();
     if (!prompt || pendingKey) return;
 
-    // Prior turns become history so scoring and dispatch see the whole session.
     const history = turns.flatMap((t) => [
       { role: "user" as const, content: t.prompt },
-      { role: "assistant" as const, content: t.response },
+      {
+        role: "assistant" as const,
+        content: t.steps.map((s) => s.response).join(""),
+      },
     ]);
     const context: PromptContext = { prompt, history };
-
-    const decision = await services.score(context);
-    const model = services.modelFor(decision.tier);
     const turnIndex = turns.length;
 
-    // Show the routed tier + model immediately — before any response streams.
     setTurns((prev) => [
       ...prev,
-      { prompt, decision, model, response: "", done: false, inFlight: true, showWhy: false },
+      { prompt, steps: [], done: false, inFlight: true, showWhy: false },
     ]);
-    services.log(context, decision, model);
 
+    // Check if a key is needed: score to find provider, then check.
+    const decision = await services.score(context);
+    const model = services.modelFor(decision.tier);
     const provider = providerOf(model);
     if (services.resolveKey(provider) === undefined) {
-      // Defer dispatch until the user supplies the key.
-      setPendingKey({ provider, model, context, turnIndex });
+      setPendingKey({ provider, context, turnIndex });
       return;
     }
-    await streamInto(turnIndex, model, context);
+
+    await runAgent(turnIndex, context);
   }
 
   async function provideKey(key: string): Promise<void> {
     const trimmed = key.trim();
     if (!pendingKey || !trimmed) return;
-    const { provider, model, context, turnIndex } = pendingKey;
+    const { provider, context, turnIndex } = pendingKey;
     services.saveKey(provider, trimmed, true);
     setPendingKey(null);
-    await streamInto(turnIndex, model, context);
+    await runAgent(turnIndex, context);
   }
 
   function toggleWhy(index: number): void {
