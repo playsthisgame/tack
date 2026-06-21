@@ -19,7 +19,7 @@ function cap(output: string): string {
 export const defaultToolRegistry = {
   read_file: tool({
     description: "Read the contents of a file at the given path.",
-    parameters: z.object({
+    inputSchema: z.object({
       path: z.string().describe("Path to the file to read"),
     }),
     execute: async ({ path }) => {
@@ -33,7 +33,7 @@ export const defaultToolRegistry = {
 
   write_file: tool({
     description: "Write content to a file, creating it (and any missing parent directories) if needed.",
-    parameters: z.object({
+    inputSchema: z.object({
       path: z.string().describe("Path to write"),
       content: z.string().describe("Content to write"),
     }),
@@ -50,7 +50,7 @@ export const defaultToolRegistry = {
 
   bash: tool({
     description: "Run a shell command. Returns combined stdout and stderr. Timeout: 30 s. Output cap: 50 KB.",
-    parameters: z.object({
+    inputSchema: z.object({
       command: z.string().describe("Shell command to execute"),
     }),
     execute: async ({ command }) => {

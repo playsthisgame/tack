@@ -1,4 +1,4 @@
-import { streamText as defaultStreamText, type CoreMessage } from "ai";
+import { streamText as defaultStreamText, stepCountIs, type CoreMessage } from "ai";
 import {
   SessionTracker,
   type AgentEvent,
@@ -95,11 +95,14 @@ export class AgentLoop {
 
         yield { type: "routing", step, decision, model };
 
+        // One model generation per outer-loop iteration: the loop itself drives
+        // multi-step tool use, so each `streamText` call is a single step. (v5's
+        // default is also `stepCountIs(1)`; set it explicitly to keep that intent.)
         const result = this.streamText({
           model: languageModel,
           messages,
           tools: this.tools,
-          maxSteps: 1,
+          stopWhen: stepCountIs(1),
         });
 
         let hasToolCalls = false;
@@ -107,7 +110,7 @@ export class AgentLoop {
         for await (const event of result.fullStream) {
           switch (event.type) {
             case "text-delta":
-              yield { type: "text-delta", delta: event.textDelta };
+              yield { type: "text-delta", delta: event.text };
               break;
             case "tool-call":
               hasToolCalls = true;
@@ -115,7 +118,7 @@ export class AgentLoop {
                 type: "tool-call",
                 id: event.toolCallId,
                 toolName: event.toolName,
-                args: event.args,
+                args: event.input,
               };
               break;
             case "tool-result":
@@ -123,7 +126,7 @@ export class AgentLoop {
                 type: "tool-result",
                 id: event.toolCallId,
                 toolName: event.toolName,
-                result: String(event.result),
+                result: String(event.output),
               };
               break;
             case "error":

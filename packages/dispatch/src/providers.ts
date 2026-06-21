@@ -1,7 +1,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import { google } from "@ai-sdk/google";
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 
 /**
  * One supported provider dialect. `model` builds an AI SDK language model from a
@@ -11,7 +11,7 @@ import type { LanguageModelV1 } from "ai";
  * (Tack ships no hardcoded model list), so adding a model never touches code.
  */
 export interface ProviderEntry {
-  model: (modelId: string) => LanguageModelV1;
+  model: (modelId: string) => LanguageModel;
   envVar: string;
 }
 
@@ -68,7 +68,7 @@ export function resolveModel(
   model: string,
   registry: ProviderRegistry = defaultRegistry,
   env: Record<string, string | undefined> = process.env,
-): LanguageModelV1 {
+): LanguageModel {
   const { provider, modelId } = parseModelString(model);
   const entry = registry[provider];
   if (!entry) {

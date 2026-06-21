@@ -158,7 +158,6 @@ function WelcomePanel(): React.JSX.Element {
             {line}
           </Text>
         ))}
-        <Text dimColor>heuristic prompt router</Text>
       </Box>
       <Box flexDirection="column" marginTop={1}>
         <Text dimColor>tier routing:</Text>
@@ -214,13 +213,15 @@ function StatusBar({ turns, pending }: { turns: Turn[]; pending: boolean }): Rea
   );
 }
 
-function KeyPrompt({
-  provider,
-  onSubmit,
-}: {
-  provider: string;
-  onSubmit: (key: string) => void;
-}): React.JSX.Element {
+function KeyPrompt(
+  {
+    provider,
+    onSubmit,
+  }: {
+    provider: string;
+    onSubmit: (key: string) => void;
+  }
+): React.JSX.Element {
   const [value, setValue] = useState("");
   return (
     <Box flexDirection="column">

@@ -31,7 +31,7 @@ function fakeStreamText(chunks: string[]) {
     calls.push(opts);
     return {
       fullStream: (async function* () {
-        for (const c of chunks) yield { type: "text-delta", textDelta: c };
+        for (const c of chunks) yield { type: "text-delta", text: c };
       })(),
       response: Promise.resolve({ messages: [] }),
     };
