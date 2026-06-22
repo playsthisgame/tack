@@ -29,6 +29,18 @@ export const defaultRegistry: Record<ProviderName, ProviderEntry> = {
 
 export type ProviderRegistry = Record<string, ProviderEntry>;
 
+/** Human-readable labels for the provider picker. */
+export const PROVIDER_LABELS: Record<ProviderName, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI (ChatGPT)",
+  google: "Google (Gemini)",
+};
+
+/** The provider names known to a registry (defaults to the built-in one). */
+export function knownProviders(registry: ProviderRegistry = defaultRegistry): string[] {
+  return Object.keys(registry);
+}
+
 /** Thrown when a model string is malformed or names an unsupported provider. */
 export class UnknownProviderError extends Error {
   constructor(message: string) {

@@ -164,6 +164,11 @@ async function cmdDispatch(prompt: string, log: boolean): Promise<void> {
           break;
         case "error":
           console.error(`error: ${event.message}`);
+          // A missing provider key surfaces here (the agent loop catches it). Point
+          // the user at the interactive connect flow.
+          if (/_API_KEY|is not set/.test(event.message)) {
+            console.error(`hint: run \`tack\` and use /connect to choose a provider and set its key`);
+          }
           process.exit(1);
           break;
         case "done":
@@ -175,6 +180,7 @@ async function cmdDispatch(prompt: string, log: boolean): Promise<void> {
   } catch (err) {
     if (err instanceof MissingApiKeyError || err instanceof UnknownProviderError) {
       console.error(`error: ${err.message}`);
+      console.error(`hint: run \`tack\` and use /connect to choose a provider and set its key`);
     } else {
       console.error(`error: dispatch failed: ${(err as Error).message}`);
     }

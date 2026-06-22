@@ -44,6 +44,40 @@
     { "id": "seed-0029", "prompt": "the TUI layout breaks when the terminal is resized — fix the reflow", "tier": "mid", "source": "seed" },
     { "id": "seed-0030", "prompt": "the progress bar flickers on every render — figure out why", "tier": "mid", "source": "seed", "boundary": "mid/frontier — symptom-scoped, but render-loop/diffing perf bugs can spike to frontier." },
 
-    { "id": "seed-0031", "prompt": "redesign the TUI into resizable split panes with a focus model", "tier": "frontier", "source": "seed" }
+    { "id": "seed-0031", "prompt": "redesign the TUI into resizable split panes with a focus model", "tier": "frontier", "source": "seed" },
+
+    { "id": "seed-0032", "prompt": "does this use bun?", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0033", "prompt": "Create a README.md for this Go CLI application. Include installation, usage examples, configuration, and troubleshooting sections.", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0034", "prompt": "Convert this Java class from field injection to constructor injection using Spring Boot best practices.", "tier": "cheap", "source": "seed" },    
+    { "id": "seed-0035", "prompt": "Create Java 17 records for these JSON payloads.", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0036", "prompt": "Add Javadoc comments to all public methods in this class.", "tier": "cheap", "source": "seed" },    
+    { "id": "seed-0037", "prompt": "Create a Spring Boot REST controller exposing CRUD operations for User entities.", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0038", "prompt": "Convert this SQL query into Spring Data JPA Specification code.", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0039", "prompt": "Create 100 sample customer records in CSV format.", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0040", "prompt": "Generate a multi-stage Dockerfile for this Java 21 Spring Boot application.", "tier": "cheap", "source": "seed" },
+    { "id": "seed-0041", "prompt": "Convert this JavaScript file to TypeScript with proper type definitions.", "tier": "cheap", "source": "seed" },
+
+    { "id": "seed-0042", "prompt": "Add user impersonation support to this Spring Boot application. Include API endpoints, security configuration, audit logging, and tests.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0043", "prompt": "Review these changed files and identify potential bugs, performance issues, and security concerns.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0044", "prompt": "Using Spring Data MongoDB builders (not raw JSON), create an aggregation pipeline that returns order statistics grouped by month and customer segment.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0045", "prompt": "Design a GraphQL schema for a SaaS billing platform supporting subscriptions, invoices, usage tracking, and discounts.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0046", "prompt": "Analyze this slow endpoint and identify the top 5 likely bottlenecks.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0047", "prompt": "Convert this synchronous Spring MVC endpoint into a reactive WebFlux implementation.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0048", "prompt": "Generate integration tests for this GraphQL API using Testcontainers and MongoDB.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0049", "prompt": "Refactor these 12 files to support soft deletes without breaking existing APIs.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0050", "prompt": "Create a GitHub Actions workflow that builds, tests, scans, and deploys this application.", "tier": "mid", "source": "seed" },
+    { "id": "seed-0051", "prompt": "Here's a stack trace and 4 related source files. Determine the root cause and propose fixes.", "tier": "mid", "source": "seed" },
+
+    { "id": "seed-0052", "prompt": "Analyze this 250,000-line codebase and generate a comprehensive architecture document explaining services, dependencies, data flow, deployment topology, and technical debt.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0053", "prompt": "Create a step-by-step migration plan from a Java 8 monolith to Java 21 microservices with minimal downtime.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0054", "prompt": "Here are logs, metrics, traces, deployment history, and source code. Determine the most likely root cause of this outage.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0055", "prompt": "Design a Dropbox-like file synchronization platform supporting 100 million users, offline sync, conflict resolution, and end-to-end encryption.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0056", "prompt": "Analyze this repository and create an execution plan for migrating from REST to GraphQL while maintaining backward compatibility.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0057", "prompt": "Explore the repository, identify technical debt, propose improvements, implement the highest-impact changes, and generate a pull request summary.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0058", "prompt": "Perform a comprehensive security review of this application and identify authentication, authorization, dependency, infrastructure, and data exposure risks.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0059", "prompt": "Investigate why users occasionally lose uploaded files. You have access to frontend code, backend services, queues, databases, and infrastructure configs.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0060", "prompt": "Compare whether this organization should migrate from MongoDB to PostgreSQL. Analyze schemas, queries, scaling patterns, operational complexity, and costs.", "tier": "frontier", "source": "seed" },
+    { "id": "seed-0061", "prompt": "Implement organization-level RBAC across this application. First understand the existing authorization model, then design the new system, update the schema, modify APIs, write tests, and generate migration documentation.", "tier": "frontier", "source": "seed" }
+
   ]
 }

@@ -7,6 +7,7 @@ import {
   FileConfigStore,
   loadConfig,
   lookupModel,
+  providerTierDefaults,
   type ConfigStore,
   type TierModelConfig,
 } from "../src/index";
@@ -43,6 +44,33 @@ describe("model catalog", () => {
 
   test("lookupModel is undefined for an unknown model", () => {
     expect(lookupModel("acme/whatever")).toBeUndefined();
+  });
+});
+
+describe("provider tier defaults", () => {
+  test("anthropic defaults match the shipped config", () => {
+    const d = providerTierDefaults("anthropic")!;
+    expect(d.cheap.model).toBe(defaultConfig.tierModels.cheap);
+    expect(d.frontier.model).toBe(defaultConfig.tierModels.frontier);
+    expect(d.frontier.window).toBe(defaultConfig.tierWindows.frontier);
+  });
+
+  test("openai/google defaults cover every tier and are catalogued", () => {
+    for (const provider of ["openai", "google"]) {
+      const d = providerTierDefaults(provider)!;
+      for (const tier of ["cheap", "mid", "frontier"] as const) {
+        expect(d[tier].model.startsWith(`${provider}/`)).toBe(true);
+        // window/cost come from the catalog, so they are coherent for routing.
+        expect(lookupModel(d[tier].model)).toEqual({
+          window: d[tier].window,
+          costPer1M: d[tier].costPer1M,
+        });
+      }
+    }
+  });
+
+  test("an unknown provider has no defaults", () => {
+    expect(providerTierDefaults("acme")).toBeUndefined();
   });
 });
 

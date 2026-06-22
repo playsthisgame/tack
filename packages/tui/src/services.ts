@@ -5,6 +5,7 @@ import {
   FileConfigStore,
   loadConfig,
   lookupModel,
+  providerTierDefaults,
   SqliteDecisionLog,
   SqliteLabeledExampleStore,
   TransformersEmbedder,
@@ -20,12 +21,28 @@ import {
   AiSdkDispatcher,
   envVarForProvider,
   FileSecretsStore,
+  knownProviders,
   parseModelString,
+  PROVIDER_LABELS,
   requiredProviders,
   resolveKey,
   validateModelString,
   type SecretsStore,
 } from "@tack/dispatch";
+
+const TIERS: Tier[] = ["cheap", "mid", "frontier"];
+
+/** A pickable provider for the connect flow. */
+export interface ProviderChoice {
+  name: string;
+  label: string;
+  connected: boolean;
+}
+
+/** Result of connecting a provider on first run / via `/connect`. */
+export type ConnectResult =
+  | { ok: true; needsKey: boolean; provider: string; label: string }
+  | { ok: false; error: string };
 
 /** Result of attempting to set a tier's model from the editor. */
 export type SetTierModelResult =
@@ -43,6 +60,17 @@ export interface TackServices {
    * `{ ok: false, needsWindow: true }` so the editor can prompt for it.
    */
   setTierModel(tier: Tier, model: string, window?: number): SetTierModelResult;
+  /** True once at least one provider used by the current tier models has a resolvable key. */
+  isConnected(): boolean;
+  /** The pickable providers (with labels and whether each already has a key). */
+  providers(): ProviderChoice[];
+  /**
+   * Point all tiers at a provider's default models and apply it. Reports whether a key
+   * is still needed so the caller can prompt for it.
+   */
+  connectProvider(name: string): ConnectResult;
+  /** Previously submitted prompts, oldest → newest, for prompt-history navigation. */
+  history(): string[];
   log(context: PromptContext, decision: RoutingDecision, model: string): void;
   dispatch(context: PromptContext): AsyncIterable<AgentEvent>;
   resolveKey(provider: string): string | undefined;
@@ -132,6 +160,41 @@ export function createServices(): TackServices {
       preloadKey(providerOf(model));
       rebuild();
       return { ok: true };
+    },
+    isConnected: () =>
+      requiredProviders(config.tierModels).some(
+        (p) => resolveKey(p, { env, store }) !== undefined,
+      ),
+    providers: () =>
+      knownProviders().map((name) => ({
+        name,
+        label: PROVIDER_LABELS[name as keyof typeof PROVIDER_LABELS] ?? name,
+        connected: resolveKey(name, { env, store }) !== undefined,
+      })),
+    connectProvider: (name): ConnectResult => {
+      const defaults = providerTierDefaults(name);
+      if (!defaults) return { ok: false, error: `unknown provider "${name}"` };
+      try {
+        for (const tier of TIERS) configStore.save(tier, defaults[tier]);
+      } catch (err) {
+        return { ok: false, error: (err as Error).message };
+      }
+      config = loadConfig(configStore);
+      preloadKey(name);
+      rebuild();
+      return {
+        ok: true,
+        provider: name,
+        label: PROVIDER_LABELS[name as keyof typeof PROVIDER_LABELS] ?? name,
+        needsKey: resolveKey(name, { env, store }) === undefined,
+      };
+    },
+    history: () => {
+      try {
+        return log?.recentPrompts(200) ?? [];
+      } catch {
+        return [];
+      }
     },
     log: (context, decision, model) => {
       try {

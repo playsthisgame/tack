@@ -1,7 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 import { defaultConfig, type Advisory, type RoutingDecision, type Tier } from "@tack/core";
-import { createServices, type SetTierModelResult, type TackServices } from "./services";
+import {
+  createServices,
+  type ConnectResult,
+  type ProviderChoice,
+  type SetTierModelResult,
+  type TackServices,
+} from "./services";
 import { useTack, type AgentStep, type Turn } from "./useTack";
 
 const TIER_COLOR: Record<Tier, string> = {
@@ -171,6 +177,7 @@ function WelcomePanel(): React.JSX.Element {
         <Text dimColor>keys:</Text>
         <Text dimColor>  ^w   toggle routing rationale for last turn</Text>
         <Text dimColor>  ^t   configure tier models</Text>
+        <Text dimColor>  /connect  choose your model provider</Text>
         <Text dimColor>  ^c   quit (or type "exit")</Text>
       </Box>
     </Box>
@@ -207,7 +214,7 @@ function StatusBar({ turns, pending }: { turns: Turn[]; pending: boolean }): Rea
           : lastStep
             ? `last: ${lastStep.decision.tier} · ${lastStep.model}`
             : "type a prompt to route it"}
-        {"  —  ^w why · ^t models · ^c quit"}
+        {"  —  ^w why · ^t models · /connect provider · ^c quit"}
       </Text>
     </Box>
   );
@@ -225,6 +232,8 @@ function PromptInput({
   value,
   onChange,
   onSubmit,
+  onHistoryPrev,
+  onHistoryNext,
   placeholder,
   mask,
   focus = true,
@@ -232,14 +241,34 @@ function PromptInput({
   value: string;
   onChange: (value: string) => void;
   onSubmit?: (value: string) => void;
+  /** Up arrow — used by the main prompt to recall an older history entry. */
+  onHistoryPrev?: () => void;
+  /** Down arrow — recall a newer entry / restore the in-progress draft. */
+  onHistoryNext?: () => void;
   placeholder?: string;
   mask?: string;
   focus?: boolean;
 }): React.JSX.Element {
   const [cursor, setCursor] = useState(value.length);
-  // The value is controlled, so it can change (e.g. cleared on submit) without a
-  // keypress; clamp the cursor into range every render rather than tracking it.
   const pos = Math.min(cursor, value.length);
+
+  // The value is controlled, so it can change without a keypress (cleared on submit,
+  // replaced on a history recall). When that happens, snap the cursor to the end so a
+  // recalled prompt is ready to edit/submit. `commit` tags edits we originate so the
+  // effect can tell them apart from external changes.
+  const lastEmitted = useRef(value);
+  useEffect(() => {
+    if (value !== lastEmitted.current) {
+      lastEmitted.current = value;
+      setCursor(value.length);
+    }
+  }, [value]);
+
+  const commit = (next: string, cursorAt: number): void => {
+    lastEmitted.current = next;
+    onChange(next);
+    setCursor(cursorAt);
+  };
 
   useInput(
     (input, key) => {
@@ -247,9 +276,17 @@ function PromptInput({
         onSubmit?.(value);
         return;
       }
+      if (key.upArrow) {
+        onHistoryPrev?.();
+        return;
+      }
+      if (key.downArrow) {
+        onHistoryNext?.();
+        return;
+      }
       // Never insert a character for a modifier combo or unhandled navigation —
       // this is exactly the `^w` → "w" leak we are fixing.
-      if (key.ctrl || key.meta || key.tab || key.upArrow || key.downArrow || key.escape) {
+      if (key.ctrl || key.meta || key.tab || key.escape) {
         return;
       }
       if (key.leftArrow) {
@@ -261,16 +298,12 @@ function PromptInput({
         return;
       }
       if (key.backspace || key.delete) {
-        if (pos > 0) {
-          onChange(value.slice(0, pos - 1) + value.slice(pos));
-          setCursor(pos - 1);
-        }
+        if (pos > 0) commit(value.slice(0, pos - 1) + value.slice(pos), pos - 1);
         return;
       }
       // Printable input (a single char, or a whole string on paste).
       if (input.length > 0) {
-        onChange(value.slice(0, pos) + input + value.slice(pos));
-        setCursor(pos + input.length);
+        commit(value.slice(0, pos) + input + value.slice(pos), pos + input.length);
       }
     },
     { isActive: focus },
@@ -403,17 +436,114 @@ function ModelConfigEditor({
   );
 }
 
+/**
+ * First-run / `/connect` provider setup. Step 1 picks a provider (↑/↓ + enter); on
+ * choose, `onConnect` points all tiers at that provider and reports whether a key is
+ * still needed. Step 2 reuses `KeyPrompt` to capture the key. Its own `useInput`
+ * handles only navigation, so no keystroke leaks into a field.
+ */
+function ProviderConnect({
+  providers,
+  onConnect,
+  onSaveKey,
+  onDone,
+}: {
+  providers: ProviderChoice[];
+  onConnect: (name: string) => ConnectResult;
+  onSaveKey: (provider: string, key: string) => void;
+  onDone: () => void;
+}): React.JSX.Element {
+  const [sel, setSel] = useState(0);
+  const [keyFor, setKeyFor] = useState<{ provider: string; label: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useInput((_input, key) => {
+    if (keyFor) return; // the key step's input handles its own keys
+    if (key.upArrow || key.downArrow) {
+      setSel((s) => (s + (key.upArrow ? providers.length - 1 : 1)) % providers.length);
+      setError(null);
+    } else if (key.return) {
+      const p = providers[sel];
+      if (!p) return;
+      const r = onConnect(p.name);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      if (r.needsKey) setKeyFor({ provider: r.provider, label: r.label });
+      else onDone();
+    }
+  });
+
+  if (keyFor) {
+    return (
+      <KeyPrompt
+        provider={keyFor.provider}
+        onSubmit={(k) => {
+          if (!k.trim()) return;
+          onSaveKey(keyFor.provider, k);
+          onDone();
+        }}
+      />
+    );
+  }
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text bold>connect a provider</Text>
+      <Text dimColor>↑/↓ select · enter choose</Text>
+      <Box flexDirection="column" marginTop={1}>
+        {providers.map((p, i) => (
+          <Text key={p.name} color={i === sel ? "cyan" : undefined} dimColor={i !== sel}>
+            {i === sel ? "› " : "  "}
+            {p.label}
+            {p.connected ? " (key set)" : ""}
+          </Text>
+        ))}
+      </Box>
+      {error && <Text color="red">{error}</Text>}
+    </Box>
+  );
+}
+
 export function App({ services }: { services: TackServices }): React.JSX.Element {
   const { turns, pendingKey, advisory, submit, provideKey, toggleWhy, dismissAdvisory } =
     useTack(services);
   const [input, setInput] = useState("");
   const [editing, setEditing] = useState(false);
+  // Provider connection: forced on first run (no resolvable key), re-openable via /connect.
+  const [connected, setConnected] = useState(() => services.isConnected());
+  const [connecting, setConnecting] = useState(false);
+  const setupOpen = !connected || connecting;
   const { exit } = useApp();
+
+  // Prompt history (oldest → newest), seeded from prior sessions and appended each
+  // turn. `histPos` is steps back from the live draft (0 = the draft itself), so ↑
+  // recalls older prompts and ↓ walks back toward the draft — like a shell.
+  const [history, setHistory] = useState<string[]>(() => services.history());
+  const [histPos, setHistPos] = useState(0);
+  const [draft, setDraft] = useState("");
+
+  const historyPrev = (): void => {
+    if (history.length === 0) return;
+    if (histPos === 0) setDraft(input); // entering history — remember the draft
+    const next = Math.min(histPos + 1, history.length);
+    setHistPos(next);
+    setInput(history[history.length - next]!);
+  };
+
+  const historyNext = (): void => {
+    if (histPos === 0) return;
+    const next = histPos - 1;
+    setHistPos(next);
+    setInput(next === 0 ? draft : history[history.length - next]!);
+  };
 
   // App-level shortcuts. `PromptInput` ignores ctrl/meta combos, so these never
   // double as typed characters. `^t` opens the tier-model editor (`^m` is unusable —
   // terminals deliver Ctrl-M as Enter).
   useInput((char, key) => {
+    if (setupOpen) return; // provider setup owns the screen
     if (key.ctrl && char === "t") {
       setEditing((e) => !e);
     } else if (key.ctrl && char === "w" && turns.length > 0) {
@@ -425,10 +555,20 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
 
   return (
     <Box flexDirection="column">
-      {turns.length === 0 && pendingKey === null && !editing && <WelcomePanel />}
+      {turns.length === 0 && pendingKey === null && !editing && !setupOpen && <WelcomePanel />}
       <Transcript turns={turns} />
       {advisory && <AdvisoryPanel advisory={advisory} />}
-      {pendingKey ? (
+      {setupOpen ? (
+        <ProviderConnect
+          providers={services.providers()}
+          onConnect={services.connectProvider}
+          onSaveKey={(provider, key) => services.saveKey(provider, key, true)}
+          onDone={() => {
+            setConnected(true);
+            setConnecting(false);
+          }}
+        />
+      ) : pendingKey ? (
         <KeyPrompt provider={pendingKey.provider} onSubmit={(key) => void provideKey(key)} />
       ) : editing ? (
         <ModelConfigEditor
@@ -441,13 +581,25 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
           <PromptInput
             value={input}
             onChange={setInput}
+            onHistoryPrev={historyPrev}
+            onHistoryNext={historyNext}
             onSubmit={(v) => {
               setInput("");
+              setHistPos(0);
+              setDraft("");
               // Typing "exit" quits, same as ^c.
               if (v.trim().toLowerCase() === "exit") {
                 exit();
                 return;
               }
+              // `/connect` re-opens the provider setup.
+              if (v.trim() === "/connect") {
+                setConnecting(true);
+                return;
+              }
+              const p = v.trim();
+              // Append to history unless it repeats the most recent entry.
+              if (p) setHistory((h) => (h[h.length - 1] === p ? h : [...h, p]));
               void submit(v);
             }}
             placeholder="ask anything…"

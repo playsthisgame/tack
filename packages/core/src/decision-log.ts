@@ -85,6 +85,25 @@ export class SqliteDecisionLog implements DecisionLog {
     writeAll();
   }
 
+  /**
+   * Recently logged prompts in chronological order (oldest → newest), with
+   * back-to-back duplicates collapsed — the source for prompt-history navigation
+   * in the TUI. Reads at most `limit` rows.
+   */
+  recentPrompts(limit = 200): string[] {
+    const rows = this.db
+      .query("SELECT prompt FROM decisions ORDER BY id DESC LIMIT $limit")
+      .all({ $limit: limit }) as { prompt: string }[];
+
+    // Query is newest-first; walk back to oldest-first, dropping consecutive repeats.
+    const out: string[] = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const prompt = rows[i]!.prompt;
+      if (out[out.length - 1] !== prompt) out.push(prompt);
+    }
+    return out;
+  }
+
   close(): void {
     this.db.close();
   }
