@@ -1,5 +1,6 @@
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import {
   buildScorer,
   CopilotAuth,
@@ -103,15 +104,22 @@ export interface TackServices {
 }
 
 const DEFAULT_DB_PATH = "./.tack/tack.db";
-const DEFAULT_COPILOT_DB_PATH = "./.tack/copilot-auth.db";
 
 function dbPath(): string {
   return process.env.TACK_DB_PATH ?? DEFAULT_DB_PATH;
 }
 
-/** Copilot auth lives in its own DB file — secrets never share the routing log. */
+/**
+ * Copilot auth lives in its own DB file — secrets never share the routing log.
+ * Unlike the routing log (per-project training data under `./.tack/`), the
+ * Copilot token is a machine-wide credential, so it defaults next to the API
+ * keys in `$XDG_CONFIG_HOME/tack` (or `~/.config/tack`) — connect once per
+ * machine, not once per directory, and keep tokens out of project trees.
+ */
 function copilotDbPath(): string {
-  return process.env.TACK_COPILOT_DB_PATH ?? DEFAULT_COPILOT_DB_PATH;
+  if (process.env.TACK_COPILOT_DB_PATH) return process.env.TACK_COPILOT_DB_PATH;
+  const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  return join(base, "tack", "copilot-auth.db");
 }
 
 export function createServices(): TackServices {
