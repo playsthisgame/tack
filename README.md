@@ -38,7 +38,17 @@ packages/
 boundary is what lets the same scorer later power a proxy or a Claude Code hook
 without a rewrite.
 
-## Setup
+## Install
+
+Tack is a [Bun](https://bun.sh) program (it uses `bun:sqlite`), so you need Bun
+installed. With Bun on your PATH:
+
+```bash
+npm install -g @playsthisgame/tack
+tack score "refactor the auth module"
+```
+
+## Setup (from source)
 
 ```bash
 bun install

@@ -1,36 +1,41 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { LabeledExample, SeedFile, Tier } from "./types";
-
-/** Path to the seed file shipped alongside this module. */
-const SHIPPED_SEEDS = join(import.meta.dir, "seeds.json");
+// The shipped seed set is embedded via a static import rather than read from a
+// sibling file at runtime: `bun build --compile` bundles imported JSON into the
+// binary, but a `readFileSync(join(import.meta.dir, ...))` would point at a path
+// that doesn't exist inside the compiled executable.
+import shippedSeeds from "./seeds.json";
 
 const TIERS: ReadonlySet<string> = new Set<Tier>(["cheap", "mid", "frontier"]);
 const SOURCES: ReadonlySet<string> = new Set(["seed", "user"]);
 
 /**
- * Read and validate a seed file. An empty `examples` array is fully valid — Tack
- * ships an empty seed set and the build/load must not fail on it. Throws only on a
- * structurally malformed file (so corruption is loud, not silently dropped).
+ * Read and validate a seed file. With no `path`, returns the embedded shipped
+ * seed set; with a `path`, reads and validates that file from disk. An empty
+ * `examples` array is fully valid — Tack ships an empty seed set and the
+ * build/load must not fail on it. Throws only on a structurally malformed file
+ * (so corruption is loud, not silently dropped).
  */
-export function loadSeedFile(path: string = SHIPPED_SEEDS): SeedFile {
-  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+export function loadSeedFile(path?: string): SeedFile {
+  const raw: unknown =
+    path === undefined ? shippedSeeds : JSON.parse(readFileSync(path, "utf8"));
+  const label = path ?? "<shipped seeds>";
   if (typeof raw !== "object" || raw === null) {
-    throw new Error(`seed file ${path}: expected a JSON object`);
+    throw new Error(`seed file ${label}: expected a JSON object`);
   }
   const file = raw as Partial<SeedFile>;
   if (typeof file.model !== "string" || typeof file.dimension !== "number") {
-    throw new Error(`seed file ${path}: missing model/dimension`);
+    throw new Error(`seed file ${label}: missing model/dimension`);
   }
   if (typeof file.version !== "number") {
-    throw new Error(`seed file ${path}: missing version`);
+    throw new Error(`seed file ${label}: missing version`);
   }
   const examples = file.examples ?? [];
   if (!Array.isArray(examples)) {
-    throw new Error(`seed file ${path}: examples must be an array`);
+    throw new Error(`seed file ${label}: examples must be an array`);
   }
   for (const ex of examples) {
-    validateExample(ex, path);
+    validateExample(ex, label);
   }
   return { model: file.model, dimension: file.dimension, version: file.version, examples };
 }

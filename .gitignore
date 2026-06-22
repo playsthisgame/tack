@@ -5,6 +5,12 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# npm publish artifacts (bundle built in CI; README copied in from repo root)
+npm/dist/
+npm/README.md
+npm/node_modules/
+npm/package-lock.json
+
 # environment & secrets
 .env
 .env.local
