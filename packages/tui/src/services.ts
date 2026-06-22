@@ -2,14 +2,18 @@ import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import {
   buildScorer,
+  CopilotAuth,
+  defaultCopilotConfig,
   FileConfigStore,
   loadConfig,
   lookupModel,
   providerTierDefaults,
+  SqliteCopilotAuthStore,
   SqliteDecisionLog,
   SqliteLabeledExampleStore,
   TransformersEmbedder,
   type AgentEvent,
+  type DeviceCodeResult,
   type LabeledExampleStore,
   type PromptContext,
   type RoutingDecision,
@@ -24,9 +28,11 @@ import {
   knownProviders,
   parseModelString,
   PROVIDER_LABELS,
+  registryWithCopilot,
   requiredProviders,
   resolveKey,
   validateModelString,
+  type ProviderRegistry,
   type SecretsStore,
 } from "@tack/dispatch";
 
@@ -37,12 +43,25 @@ export interface ProviderChoice {
   name: string;
   label: string;
   connected: boolean;
+  /** True for providers that use browser-based sign-in (device flow) instead of an API key. */
+  browserSignIn?: boolean;
 }
 
-/** Result of connecting a provider on first run / via `/connect`. */
+/**
+ * Result of connecting a provider on first run / via `/connect`. `kind`
+ * discriminates the auth UI the caller must show next: `"key"` providers prompt
+ * for an API key (when `needsKey`); `"device"` providers (Copilot) run the
+ * browser device flow via `connectCopilot` instead.
+ */
 export type ConnectResult =
-  | { ok: true; needsKey: boolean; provider: string; label: string }
+  | { ok: true; kind: "key"; needsKey: boolean; provider: string; label: string }
+  | { ok: true; kind: "device"; provider: string; label: string }
   | { ok: false; error: string };
+
+/** Progress callbacks for the Copilot device flow. */
+export interface CopilotConnectCallbacks {
+  onUserCode?: (device: DeviceCodeResult) => void;
+}
 
 /** Result of attempting to set a tier's model from the editor. */
 export type SetTierModelResult =
@@ -69,6 +88,12 @@ export interface TackServices {
    * is still needed so the caller can prompt for it.
    */
   connectProvider(name: string): ConnectResult;
+  /**
+   * Run the Copilot browser device flow (reusing an OpenCode token when valid),
+   * persisting auth to the dedicated Copilot store. `onUserCode` fires with the
+   * code the user must enter at GitHub. Resolves once authenticated.
+   */
+  connectCopilot(callbacks?: CopilotConnectCallbacks): Promise<{ ok: true } | { ok: false; error: string }>;
   /** Previously submitted prompts, oldest → newest, for prompt-history navigation. */
   history(): string[];
   log(context: PromptContext, decision: RoutingDecision, model: string): void;
@@ -78,9 +103,15 @@ export interface TackServices {
 }
 
 const DEFAULT_DB_PATH = "./.tack/tack.db";
+const DEFAULT_COPILOT_DB_PATH = "./.tack/copilot-auth.db";
 
 function dbPath(): string {
   return process.env.TACK_DB_PATH ?? DEFAULT_DB_PATH;
+}
+
+/** Copilot auth lives in its own DB file — secrets never share the routing log. */
+function copilotDbPath(): string {
+  return process.env.TACK_COPILOT_DB_PATH ?? DEFAULT_COPILOT_DB_PATH;
 }
 
 export function createServices(): TackServices {
@@ -118,6 +149,15 @@ export function createServices(): TackServices {
     labeledStore = undefined;
   }
 
+  // Copilot auth: a dedicated store (separate DB) plus the auth orchestrator that
+  // drives the device flow and exchanges/caches the Copilot bearer token.
+  mkdirSync(dirname(copilotDbPath()), { recursive: true });
+  const copilotStore = new SqliteCopilotAuthStore(copilotDbPath());
+  const copilotAuth = new CopilotAuth({ store: copilotStore, config: defaultCopilotConfig });
+
+  /** Whether a tier's provider is Copilot (which is connected via auth state, not a key). */
+  const isCopilot = (provider: string): boolean => provider === "copilot";
+
   // A single embedder instance reused across rebuilds so changing a tier model does
   // not reload the embedding model (which is independent of the routed model).
   const embedder = new TransformersEmbedder(config.knn.model, config.knn.dimension);
@@ -128,11 +168,14 @@ export function createServices(): TackServices {
   // rebuild after a config change is picked up on the next prompt.
   let scorerPromise: Promise<Scorer> = buildScorer(config, { store: labeledStore, embedder });
   const scorer: Scorer = { score: async (context) => (await scorerPromise).score(context) };
-  let dispatcher = new AiSdkDispatcher({ env, scorer, config });
+  // The registry carries Copilot so a Copilot-backed tier resolves without an API
+  // key (its bearer is injected per request by the provider's fetch wrapper).
+  const registry: ProviderRegistry = registryWithCopilot(copilotAuth, defaultCopilotConfig);
+  let dispatcher = new AiSdkDispatcher({ env, scorer, config, registry });
 
   const rebuild = (): void => {
     scorerPromise = buildScorer(config, { store: labeledStore, embedder });
-    dispatcher = new AiSdkDispatcher({ env, scorer, config });
+    dispatcher = new AiSdkDispatcher({ env, scorer, config, registry });
   };
 
   return {
@@ -162,15 +205,22 @@ export function createServices(): TackServices {
       return { ok: true };
     },
     isConnected: () =>
-      requiredProviders(config.tierModels).some(
-        (p) => resolveKey(p, { env, store }) !== undefined,
+      requiredProviders(config.tierModels).some((p) =>
+        isCopilot(p) ? copilotAuth.isConnected() : resolveKey(p, { env, store }) !== undefined,
       ),
-    providers: () =>
-      knownProviders().map((name) => ({
+    providers: () => [
+      ...knownProviders().map((name) => ({
         name,
         label: PROVIDER_LABELS[name as keyof typeof PROVIDER_LABELS] ?? name,
         connected: resolveKey(name, { env, store }) !== undefined,
       })),
+      {
+        name: "copilot",
+        label: PROVIDER_LABELS.copilot,
+        connected: copilotAuth.isConnected(),
+        browserSignIn: true,
+      },
+    ],
     connectProvider: (name): ConnectResult => {
       const defaults = providerTierDefaults(name);
       if (!defaults) return { ok: false, error: `unknown provider "${name}"` };
@@ -180,14 +230,29 @@ export function createServices(): TackServices {
         return { ok: false, error: (err as Error).message };
       }
       config = loadConfig(configStore);
-      preloadKey(name);
+      const label = PROVIDER_LABELS[name as keyof typeof PROVIDER_LABELS] ?? name;
       rebuild();
+      // Copilot does not take an API key — it authenticates via the device flow.
+      if (isCopilot(name)) {
+        return { ok: true, kind: "device", provider: name, label };
+      }
+      preloadKey(name);
       return {
         ok: true,
+        kind: "key",
         provider: name,
-        label: PROVIDER_LABELS[name as keyof typeof PROVIDER_LABELS] ?? name,
+        label,
         needsKey: resolveKey(name, { env, store }) === undefined,
       };
+    },
+    connectCopilot: async (callbacks) => {
+      try {
+        await copilotAuth.connect({ onUserCode: callbacks?.onUserCode });
+        rebuild();
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: (err as Error).message };
+      }
     },
     history: () => {
       try {

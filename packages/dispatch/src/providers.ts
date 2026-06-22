@@ -7,21 +7,25 @@ import type { LanguageModel } from "ai";
  * One supported provider dialect. `model` builds an AI SDK language model from a
  * bare model id; `envVar` is the API key the provider reads from the environment.
  *
+ * `envVar` is OPTIONAL: providers that manage their own auth (e.g. Copilot, which
+ * authenticates via GitHub device flow and injects a bearer per request) omit it,
+ * and `resolveModel` then skips the API-key check for them.
+ *
  * Only the provider *dialects* are known here — model ids stay config-driven
  * (Tack ships no hardcoded model list), so adding a model never touches code.
  */
 export interface ProviderEntry {
   model: (modelId: string) => LanguageModel;
-  envVar: string;
+  envVar?: string;
 }
 
-export type ProviderName = "anthropic" | "openai" | "google";
+export type ProviderName = "anthropic" | "openai" | "google" | "copilot";
 
 /**
  * The registry mapping provider names to their AI SDK factories. This is the one
  * swappable table of provider knowledge; a new provider is a new entry here.
  */
-export const defaultRegistry: Record<ProviderName, ProviderEntry> = {
+export const defaultRegistry: Record<"anthropic" | "openai" | "google", ProviderEntry> = {
   anthropic: { model: (id) => anthropic(id), envVar: "ANTHROPIC_API_KEY" },
   openai: { model: (id) => openai(id), envVar: "OPENAI_API_KEY" },
   google: { model: (id) => google(id), envVar: "GOOGLE_GENERATIVE_AI_API_KEY" },
@@ -34,6 +38,7 @@ export const PROVIDER_LABELS: Record<ProviderName, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI (ChatGPT)",
   google: "Google (Gemini)",
+  copilot: "GitHub Copilot (browser sign-in)",
 };
 
 /** The provider names known to a registry (defaults to the built-in one). */
@@ -113,7 +118,9 @@ export function resolveModel(
       `unsupported provider "${provider}" in model "${model}"`,
     );
   }
-  if (!env[entry.envVar]) {
+  // Providers without an `envVar` manage their own auth (e.g. Copilot's device
+  // flow) — there is no API key to require.
+  if (entry.envVar && !env[entry.envVar]) {
     throw new MissingApiKeyError(entry.envVar);
   }
   return entry.model(modelId);

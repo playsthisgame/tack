@@ -50,6 +50,12 @@ export const MODEL_CATALOG: Record<string, { window: number; costPer1M: number }
   "openai/o1": { window: 200_000, costPer1M: 15 },
   "google/gemini-1.5-flash": { window: 1_000_000, costPer1M: 1 },
   "google/gemini-1.5-pro": { window: 2_000_000, costPer1M: 5 },
+  // GitHub Copilot. Billing is a flat subscription, so per-token cost is 0 (the
+  // escalation-cost advisory is informational only here). Windows are the
+  // underlying models' published context sizes.
+  "copilot/gpt-4o-mini": { window: 128_000, costPer1M: 0 },
+  "copilot/gpt-4o": { window: 128_000, costPer1M: 0 },
+  "copilot/claude-3.7-sonnet": { window: 200_000, costPer1M: 0 },
 };
 
 /** Look up a known model's window/cost, or `undefined` if it is not in the catalog. */
@@ -84,6 +90,11 @@ export const PROVIDER_TIER_DEFAULTS: Record<string, Record<Tier, TierModelOverri
     cheap: fromCatalog("google/gemini-1.5-flash"),
     mid: fromCatalog("google/gemini-1.5-pro"),
     frontier: fromCatalog("google/gemini-1.5-pro"),
+  },
+  copilot: {
+    cheap: fromCatalog("copilot/gpt-4o-mini"),
+    mid: fromCatalog("copilot/gpt-4o"),
+    frontier: fromCatalog("copilot/claude-3.7-sonnet"),
   },
 };
 

@@ -1,9 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
-import { defaultConfig, type Advisory, type RoutingDecision, type Tier } from "@tack/core";
+import {
+  defaultConfig,
+  type Advisory,
+  type DeviceCodeResult,
+  type RoutingDecision,
+  type Tier,
+} from "@tack/core";
 import {
   createServices,
   type ConnectResult,
+  type CopilotConnectCallbacks,
   type ProviderChoice,
   type SetTierModelResult,
   type TackServices,
@@ -437,28 +444,85 @@ function ModelConfigEditor({
 }
 
 /**
+ * Copilot browser sign-in. Shows the GitHub `user_code` and verification URL the
+ * user must open, then spins while polling completes. No key is ever requested.
+ */
+function CopilotConnect({
+  onConnect,
+  onDone,
+}: {
+  onConnect: (callbacks?: CopilotConnectCallbacks) => Promise<{ ok: true } | { ok: false; error: string }>;
+  onDone: () => void;
+}): React.JSX.Element {
+  const [device, setDevice] = useState<DeviceCodeResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const started = useRef(false);
+
+  useEffect(() => {
+    if (started.current) return; // run the flow exactly once
+    started.current = true;
+    void onConnect({ onUserCode: setDevice }).then((r) => {
+      if (r.ok) onDone();
+      else setError(r.error);
+    });
+  }, [onConnect, onDone]);
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text bold>GitHub Copilot sign-in</Text>
+      {error ? (
+        <Text color="red">{error}</Text>
+      ) : device ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text>
+            Open <Text color="cyan">{device.verificationUri}</Text> and enter code:
+          </Text>
+          <Text bold color="yellow">
+            {"  "}
+            {device.userCode}
+          </Text>
+          <Box>
+            <Spinner />
+            <Text dimColor> waiting for authorization…</Text>
+          </Box>
+        </Box>
+      ) : (
+        <Box>
+          <Spinner />
+          <Text dimColor> starting sign-in (checking for an existing session)…</Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+/**
  * First-run / `/connect` provider setup. Step 1 picks a provider (↑/↓ + enter); on
- * choose, `onConnect` points all tiers at that provider and reports whether a key is
- * still needed. Step 2 reuses `KeyPrompt` to capture the key. Its own `useInput`
- * handles only navigation, so no keystroke leaks into a field.
+ * choose, `onConnect` points all tiers at that provider and reports the auth UI to
+ * show next: key providers reuse `KeyPrompt`; Copilot (`kind: "device"`) runs the
+ * browser device flow via `CopilotConnect`. Its own `useInput` handles only
+ * navigation, so no keystroke leaks into a field.
  */
 function ProviderConnect({
   providers,
   onConnect,
+  onConnectCopilot,
   onSaveKey,
   onDone,
 }: {
   providers: ProviderChoice[];
   onConnect: (name: string) => ConnectResult;
+  onConnectCopilot: (callbacks?: CopilotConnectCallbacks) => Promise<{ ok: true } | { ok: false; error: string }>;
   onSaveKey: (provider: string, key: string) => void;
   onDone: () => void;
 }): React.JSX.Element {
   const [sel, setSel] = useState(0);
   const [keyFor, setKeyFor] = useState<{ provider: string; label: string } | null>(null);
+  const [deviceFlow, setDeviceFlow] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useInput((_input, key) => {
-    if (keyFor) return; // the key step's input handles its own keys
+    if (keyFor || deviceFlow) return; // the active sub-step owns input
     if (key.upArrow || key.downArrow) {
       setSel((s) => (s + (key.upArrow ? providers.length - 1 : 1)) % providers.length);
       setError(null);
@@ -470,10 +534,15 @@ function ProviderConnect({
         setError(r.error);
         return;
       }
-      if (r.needsKey) setKeyFor({ provider: r.provider, label: r.label });
+      if (r.kind === "device") setDeviceFlow(true);
+      else if (r.needsKey) setKeyFor({ provider: r.provider, label: r.label });
       else onDone();
     }
   });
+
+  if (deviceFlow) {
+    return <CopilotConnect onConnect={onConnectCopilot} onDone={onDone} />;
+  }
 
   if (keyFor) {
     return (
@@ -497,7 +566,7 @@ function ProviderConnect({
           <Text key={p.name} color={i === sel ? "cyan" : undefined} dimColor={i !== sel}>
             {i === sel ? "› " : "  "}
             {p.label}
-            {p.connected ? " (key set)" : ""}
+            {p.connected ? (p.browserSignIn ? " (signed in)" : " (key set)") : ""}
           </Text>
         ))}
       </Box>
@@ -562,6 +631,7 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
         <ProviderConnect
           providers={services.providers()}
           onConnect={services.connectProvider}
+          onConnectCopilot={services.connectCopilot}
           onSaveKey={(provider, key) => services.saveKey(provider, key, true)}
           onDone={() => {
             setConnected(true);
