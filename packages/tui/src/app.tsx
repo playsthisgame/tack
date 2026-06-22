@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 import { defaultConfig, type Advisory, type RoutingDecision, type Tier } from "@tack/core";
-import { createServices, type TackServices } from "./services";
+import { createServices, type SetTierModelResult, type TackServices } from "./services";
 import { useTack, type AgentStep, type Turn } from "./useTack";
 
 const TIER_COLOR: Record<Tier, string> = {
@@ -170,7 +170,8 @@ function WelcomePanel(): React.JSX.Element {
       <Box flexDirection="column" marginTop={1}>
         <Text dimColor>keys:</Text>
         <Text dimColor>  ^w   toggle routing rationale for last turn</Text>
-        <Text dimColor>  ^c   quit</Text>
+        <Text dimColor>  ^t   configure tier models</Text>
+        <Text dimColor>  ^c   quit (or type "exit")</Text>
       </Box>
     </Box>
   );
@@ -206,7 +207,7 @@ function StatusBar({ turns, pending }: { turns: Turn[]; pending: boolean }): Rea
           : lastStep
             ? `last: ${lastStep.decision.tier} · ${lastStep.model}`
             : "type a prompt to route it"}
-        {"  —  ^w why · ^c quit"}
+        {"  —  ^w why · ^t models · ^c quit"}
       </Text>
     </Box>
   );
@@ -312,16 +313,110 @@ function KeyPrompt(
   );
 }
 
+/**
+ * Modal editor for the per-tier model mapping. Reuses `PromptInput` (which ignores
+ * ctrl/meta combos) so the `^t` that opens it cannot leak a character, and runs its
+ * own `useInput` only for navigation (↑/↓) and dismissal (esc) — keys `PromptInput`
+ * ignores, so the two handlers never collide.
+ */
+function ModelConfigEditor({
+  models,
+  onSet,
+  onClose,
+}: {
+  models: Record<Tier, string>;
+  onSet: (tier: Tier, model: string, window?: number) => SetTierModelResult;
+  onClose: () => void;
+}): React.JSX.Element {
+  const tiers: Tier[] = ["cheap", "mid", "frontier"];
+  const [sel, setSel] = useState(0);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const [windowValue, setWindowValue] = useState("");
+  const tier = tiers[sel]!;
+
+  useInput((_input, key) => {
+    if (key.escape) {
+      onClose();
+      return;
+    }
+    if (pendingModel) return; // lock selection while entering a window
+    if (key.upArrow || key.downArrow) {
+      const next = (sel + (key.upArrow ? tiers.length - 1 : 1)) % tiers.length;
+      setSel(next);
+      setValue("");
+      setError(null);
+    }
+  });
+
+  const saveModel = (v: string): void => {
+    const model = v.trim();
+    if (!model) return; // empty submit leaves the tier unchanged
+    const r = onSet(tier, model);
+    if (r.ok) return onClose();
+    if (r.needsWindow) {
+      setPendingModel(model);
+      setWindowValue("");
+    }
+    setError(r.error);
+  };
+
+  const saveWindow = (v: string): void => {
+    const n = Number(v.trim());
+    if (!Number.isFinite(n) || n <= 0) {
+      setError("window must be a positive number of tokens");
+      return;
+    }
+    const r = onSet(tier, pendingModel!, n);
+    if (r.ok) return onClose();
+    setError(r.error);
+  };
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text bold>configure tier models</Text>
+      <Text dimColor>↑/↓ select · type a model · enter save · esc cancel</Text>
+      <Box flexDirection="column" marginTop={1}>
+        {tiers.map((t, i) => (
+          <Text key={t} color={i === sel ? TIER_COLOR[t] : undefined} dimColor={i !== sel}>
+            {i === sel ? "› " : "  "}
+            {t.padEnd(10)} {models[t]}
+          </Text>
+        ))}
+      </Box>
+      <Box marginTop={1}>
+        {pendingModel ? (
+          <>
+            <Text color="yellow">window for {pendingModel} › </Text>
+            <PromptInput value={windowValue} onChange={setWindowValue} onSubmit={saveWindow} />
+          </>
+        ) : (
+          <>
+            <Text color={TIER_COLOR[tier]}>{tier} model › </Text>
+            <PromptInput value={value} onChange={setValue} onSubmit={saveModel} placeholder={models[tier]} />
+          </>
+        )}
+      </Box>
+      {error && <Text color="red">{error}</Text>}
+    </Box>
+  );
+}
+
 export function App({ services }: { services: TackServices }): React.JSX.Element {
   const { turns, pendingKey, advisory, submit, provideKey, toggleWhy, dismissAdvisory } =
     useTack(services);
   const [input, setInput] = useState("");
+  const [editing, setEditing] = useState(false);
   const { exit } = useApp();
 
   // App-level shortcuts. `PromptInput` ignores ctrl/meta combos, so these never
-  // double as typed characters.
+  // double as typed characters. `^t` opens the tier-model editor (`^m` is unusable —
+  // terminals deliver Ctrl-M as Enter).
   useInput((char, key) => {
-    if (key.ctrl && char === "w" && turns.length > 0) {
+    if (key.ctrl && char === "t") {
+      setEditing((e) => !e);
+    } else if (key.ctrl && char === "w" && turns.length > 0) {
       toggleWhy(turns.length - 1);
     } else if (key.ctrl && char === "d" && advisory) {
       dismissAdvisory();
@@ -330,11 +425,17 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
 
   return (
     <Box flexDirection="column">
-      {turns.length === 0 && pendingKey === null && <WelcomePanel />}
+      {turns.length === 0 && pendingKey === null && !editing && <WelcomePanel />}
       <Transcript turns={turns} />
       {advisory && <AdvisoryPanel advisory={advisory} />}
       {pendingKey ? (
         <KeyPrompt provider={pendingKey.provider} onSubmit={(key) => void provideKey(key)} />
+      ) : editing ? (
+        <ModelConfigEditor
+          models={services.tierModels()}
+          onSet={services.setTierModel}
+          onClose={() => setEditing(false)}
+        />
       ) : (
         <Box borderStyle="round" borderColor="cyan">
           <PromptInput
@@ -342,6 +443,11 @@ export function App({ services }: { services: TackServices }): React.JSX.Element
             onChange={setInput}
             onSubmit={(v) => {
               setInput("");
+              // Typing "exit" quits, same as ^c.
+              if (v.trim().toLowerCase() === "exit") {
+                exit();
+                return;
+              }
               void submit(v);
             }}
             placeholder="ask anything…"

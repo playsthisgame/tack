@@ -6,6 +6,7 @@ import {
   UnknownProviderError,
   parseModelString,
   resolveModel,
+  validateModelString,
 } from "../src/index";
 
 // These tests exercise dispatch mechanics (key handling, message building,
@@ -71,6 +72,22 @@ describe("parseModelString + resolveModel", () => {
     expect(() => parseModelString("no-slash-here")).toThrow(UnknownProviderError);
     expect(() => parseModelString("trailing/")).toThrow(UnknownProviderError);
     expect(() => parseModelString("/leading")).toThrow(UnknownProviderError);
+  });
+});
+
+describe("validateModelString", () => {
+  test("accepts a known provider", () => {
+    expect(validateModelString("anthropic/claude-haiku-4-5")).toEqual({ ok: true });
+  });
+
+  test("rejects an unknown provider with a message naming it", () => {
+    const r = validateModelString("acme/whatever");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("acme");
+  });
+
+  test("rejects a malformed model string", () => {
+    expect(validateModelString("no-slash").ok).toBe(false);
   });
 });
 

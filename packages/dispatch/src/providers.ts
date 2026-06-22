@@ -60,6 +60,31 @@ export function parseModelString(model: string): { provider: string; modelId: st
 }
 
 /**
+ * Validate a `provider/model` string for configuration: it must parse and name a
+ * provider in the registry. Returns `{ ok: true }` or a clear error message naming
+ * the offending value. This is the check the model-config editor runs before
+ * persisting, so `@tack/core` need not know the provider set.
+ */
+export function validateModelString(
+  model: string,
+  registry: ProviderRegistry = defaultRegistry,
+): { ok: true } | { ok: false; error: string } {
+  let provider: string;
+  try {
+    ({ provider } = parseModelString(model));
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  if (!registry[provider]) {
+    return {
+      ok: false,
+      error: `unknown provider "${provider}" (known: ${Object.keys(registry).join(", ")})`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * Resolve a `provider/model` string against the registry and verify its API key
  * is present, WITHOUT making any network call. Returns the AI SDK language model
  * ready to dispatch.

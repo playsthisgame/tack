@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./config";
+export * from "./tier-config";
 export * from "./signals";
 export * from "./scorer";
 export * from "./session";

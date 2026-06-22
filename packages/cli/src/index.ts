@@ -4,7 +4,8 @@ import { mkdirSync, readFileSync } from "node:fs";
 import {
   BpeTokenizer,
   buildScorer,
-  defaultConfig,
+  FileConfigStore,
+  loadConfig,
   simulateRoute,
   SqliteDecisionLog,
   SqliteLabeledExampleStore,
@@ -90,6 +91,11 @@ function printDecision(d: RoutingDecision, model: string): void {
   console.log();
 }
 
+/** The active scoring config: built-in defaults merged with the user's tier-model overrides. */
+function activeConfig(): ScoringConfig {
+  return loadConfig(new FileConfigStore());
+}
+
 /**
  * Build the scorer the config selects, supplying the k-NN scorer the user's
  * labeled-example store (seeds + the user's own labels from the log DB).
@@ -103,7 +109,8 @@ async function resolveScorer(config: ScoringConfig): Promise<Scorer> {
 }
 
 async function cmdScore(prompt: string, log: boolean, scorerKind?: ScoringConfig["scorer"]): Promise<void> {
-  const config: ScoringConfig = scorerKind ? { ...defaultConfig, scorer: scorerKind } : defaultConfig;
+  const base = activeConfig();
+  const config: ScoringConfig = scorerKind ? { ...base, scorer: scorerKind } : base;
   const scorer = await resolveScorer(config);
   const context: PromptContext = { prompt, history: [] };
   const d = await scorer.score(context);
@@ -115,7 +122,7 @@ async function cmdScore(prompt: string, log: boolean, scorerKind?: ScoringConfig
 
 async function cmdDispatch(prompt: string, log: boolean): Promise<void> {
   const context: PromptContext = { prompt, history: [] };
-  const dispatcher = new AiSdkDispatcher();
+  const dispatcher = new AiSdkDispatcher({ config: activeConfig() });
 
   let firstStep = true;
   let blocked = false;
@@ -263,12 +270,13 @@ async function cmdRoute(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  const base = activeConfig();
   const { tierWindows, responseHeadroom } = parseWindows(
     windowsSpec,
-    { tierWindows: defaultConfig.tierWindows, responseHeadroom: defaultConfig.responseHeadroom },
+    { tierWindows: base.tierWindows, responseHeadroom: base.responseHeadroom },
     headroomOverride,
   );
-  const config: ScoringConfig = { ...defaultConfig, tierWindows, responseHeadroom };
+  const config: ScoringConfig = { ...base, tierWindows, responseHeadroom };
 
   // Optionally inject the same environment system prompt real dispatch sends
   // (cwd, file tree, git context) so the simulated token count and routing match.
